@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <!-- Background Gradient -->
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="50%" stop-color="#1e1b4b"/>
+      <stop offset="100%" stop-color="#090d16"/>
+    </linearGradient>
+
+    <!-- Border / Rim Glow Gradient -->
+    <linearGradient id="rimGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38bdf8"/>
+      <stop offset="50%" stop-color="#6366f1"/>
+      <stop offset="100%" stop-color="#a855f7"/>
+    </linearGradient>
+
+    <!-- Primary Cyan-Blue Gradient -->
+    <linearGradient id="cyanGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#7dd3fc"/>
+      <stop offset="40%" stop-color="#38bdf8"/>
+      <stop offset="100%" stop-color="#0284c7"/>
+    </linearGradient>
+
+    <!-- Accent Purple-Indigo Gradient -->
+    <linearGradient id="purpleGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#c084fc"/>
+      <stop offset="50%" stop-color="#8b5cf6"/>
+      <stop offset="100%" stop-color="#4f46e5"/>
+    </linearGradient>
+
+    <!-- Warm Gold / Amber Khmer Accent -->
+    <linearGradient id="goldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fde68a"/>
+      <stop offset="50%" stop-color="#f59e0b"/>
+      <stop offset="100%" stop-color="#d97706"/>
+    </linearGradient>
+
+    <!-- Soft Drop Shadow -->
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="12" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+  </defs>
+
+  <!-- Rounded App Icon Base -->
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="url(#bgGrad)" stroke="url(#rimGrad)" stroke-width="8"/>
+
+  <!-- Subtle Inner Studio Ring -->
+  <circle cx="256" cy="256" r="196" fill="none" stroke="url(#rimGrad)" stroke-width="2" stroke-opacity="0.25" stroke-dasharray="8 8"/>
+  <circle cx="256" cy="256" r="160" fill="#1e293b" fill-opacity="0.35"/>
+
+  <!-- Film Strip / Clapperboard Arc (Left & Top) -->
+  <path d="M116 180 C116 125, 165 96, 230 96 L282 96 C347 96, 396 125, 396 180" fill="none" stroke="url(#cyanGrad)" stroke-width="14" stroke-linecap="round" opacity="0.85"/>
+
+  <!-- Soundwave Bars (Left & Right of Central Play/Mic Motif) -->
+  <!-- Left Waves -->
+  <rect x="88" y="226" width="14" height="60" rx="7" fill="url(#cyanGrad)"/>
+  <rect x="116" y="196" width="14" height="120" rx="7" fill="url(#cyanGrad)"/>
+  <rect x="144" y="168" width="14" height="176" rx="7" fill="url(#cyanGrad)"/>
+
+  <!-- Right Waves -->
+  <rect x="354" y="168" width="14" height="176" rx="7" fill="url(#purpleGrad)"/>
+  <rect x="382" y="196" width="14" height="120" rx="7" fill="url(#purpleGrad)"/>
+  <rect x="410" y="226" width="14" height="60" rx="7" fill="url(#purpleGrad)"/>
+
+  <!-- Central Cinema Play Triangle + Studio Dubbing Microphone Fusion -->
+  <!-- Translucent Play Prism Backdrop -->
+  <path d="M192 146 L348 242 C362 250, 362 262, 348 270 L192 366 C178 374, 168 366, 168 350 L168 162 C168 146, 178 138, 192 146 Z" fill="url(#purpleGrad)" opacity="0.28"/>
+
+  <!-- Studio Condenser Microphone Capsule (Center) -->
+  <rect x="216" y="138" width="80" height="136" rx="40" fill="url(#cyanGrad)" stroke="#f8fafc" stroke-width="4"/>
+  <!-- Mic Grille Lines -->
+  <line x1="232" y1="174" x2="280" y2="174" stroke="#0f172a" stroke-width="5" stroke-linecap="round" opacity="0.45"/>
+  <line x1="226" y1="198" x2="286" y2="198" stroke="#0f172a" stroke-width="5" stroke-linecap="round" opacity="0.45"/>
+  <line x1="232" y1="222" x2="280" y2="222" stroke="#0f172a" stroke-width="5" stroke-linecap="round" opacity="0.45"/>
+
+  <!-- Play Triangle Badge Overlay on Mic -->
+  <path d="M244 176 L278 198 L244 220 Z" fill="#ffffff"/>
+
+  <!-- Microphone Cradle & Stand -->
+  <path d="M190 212 A66 66 0 0 0 322 212" fill="none" stroke="url(#goldGrad)" stroke-width="12" stroke-linecap="round"/>
+  <line x1="256" y1="278" x2="256" y2="338" stroke="url(#goldGrad)" stroke-width="12" stroke-linecap="round"/>
+  <path d="M206 338 L306 338" stroke="url(#goldGrad)" stroke-width="12" stroke-linecap="round"/>
+
+  <!-- Subtitle / Translation Track Bar at Bottom -->
+  <rect x="136" y="382" width="240" height="44" rx="12" fill="#0f172a" stroke="url(#rimGrad)" stroke-width="3"/>
+  <circle cx="164" cy="404" r="8" fill="#38bdf8"/>
+  <rect x="184" y="398" width="88" height="12" rx="6" fill="#38bdf8"/>
+  <rect x="284" y="398" width="68" height="12" rx="6" fill="#a855f7"/>
+
+  <!-- AI Sparkle Star (Top Right) -->
+  <path d="M356 102 Q356 126 380 126 Q356 126 356 150 Q356 126 332 126 Q356 126 356 102 Z" fill="url(#goldGrad)"/>
+</svg>
+

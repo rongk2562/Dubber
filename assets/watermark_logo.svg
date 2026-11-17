@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 160" width="640" height="160">
+  <defs>
+    <linearGradient id="badgeBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a" stop-opacity="0.88"/>
+      <stop offset="100%" stop-color="#1e1b4b" stop-opacity="0.88"/>
+    </linearGradient>
+    <linearGradient id="accentCyan" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#7dd3fc"/>
+      <stop offset="100%" stop-color="#0284c7"/>
+    </linearGradient>
+    <linearGradient id="accentPurple" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#c084fc"/>
+      <stop offset="100%" stop-color="#6366f1"/>
+    </linearGradient>
+    <linearGradient id="goldAccent" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fde68a"/>
+      <stop offset="100%" stop-color="#f59e0b"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Pill Background for Video Watermark -->
+  <rect x="8" y="16" width="624" height="128" rx="64" fill="url(#badgeBg)" stroke="url(#accentCyan)" stroke-width="3"/>
+
+  <!-- Left Icon Circle -->
+  <circle cx="72" cy="80" r="48" fill="#0f172a" stroke="url(#accentPurple)" stroke-width="3"/>
+
+  <!-- Mini Soundwave + Mic + Play Icon -->
+  <rect x="38" y="68" width="6" height="24" rx="3" fill="url(#accentCyan)"/>
+  <rect x="48" y="56" width="6" height="48" rx="3" fill="url(#accentCyan)"/>
+  <rect x="60" y="48" width="24" height="42" rx="12" fill="url(#accentCyan)"/>
+  <path d="M68 61 L80 69 L68 77 Z" fill="#ffffff"/>
+  <path d="M52 72 A20 20 0 0 0 92 72" fill="none" stroke="url(#goldAccent)" stroke-width="4" stroke-linecap="round"/>
+  <line x1="72" y1="92" x2="72" y2="108" stroke="url(#goldAccent)" stroke-width="4" stroke-linecap="round"/>
+  <rect x="90" y="56" width="6" height="48" rx="3" fill="url(#accentPurple)"/>
+  <rect x="100" y="68" width="6" height="24" rx="3" fill="url(#accentPurple)"/>
+
+  <!-- Studio Title Text -->
+  <text x="142" y="74" font-family="'Kantumruy Pro', 'Plus Jakarta Sans', 'Segoe UI', sans-serif" font-size="34" font-weight="800" fill="#f8fafc" letter-spacing="1">
+    AI DUB <tspan fill="url(#accentCyan)">STUDIO</tspan>
+  </text>
+  <text x="144" y="110" font-family="'Kantumruy Pro', 'Khmer OS', 'Segoe UI', sans-serif" font-size="20" font-weight="600" fill="#cbd5e1">
+    បកប្រែខ្សែភាពយន្ត និងបញ្ចូលសំឡេងខ្មែរស្វ័យប្រវត្តិ
+  </text>
+</svg>
+

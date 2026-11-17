@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="km">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Dub Studio - Mongoose Version Control Dashboard</title>
+  <link rel="icon" type="image/png" href="/logo.png">
+  <link href="https://fonts.googleapis.com/css2?family=Kantumruy+Pro:wght@400;600;700&family=Plus+Jakarta+Sans:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #090d16;
+      --card-bg: #0f172a;
+      --border: #1e293b;
+      --primary: #0284c7;
+      --primary-hover: #0369a1;
+      --accent: #38bdf8;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+      --success: #10b981;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      font-family: 'Kantumruy Pro', 'Plus Jakarta Sans', sans-serif;
+      padding: 30px 20px;
+      line-height: 1.6;
+    }
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+    }
+    header {
+      margin-bottom: 25px;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 15px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    h1 {
+      font-size: 22px;
+      color: #f1f5f9;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .badge {
+      background: #0284c7;
+      color: white;
+      padding: 3px 10px;
+      border-radius: 20px;
+      font-size: 11px;
+      font-weight: bold;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+      margin-bottom: 30px;
+    }
+    .card {
+      background-color: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 20px;
+    }
+    .card-title {
+      font-size: 15px;
+      font-weight: bold;
+      color: var(--accent);
+      margin-bottom: 15px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .form-group {
+      margin-bottom: 14px;
+    }
+    label {
+      display: block;
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-bottom: 5px;
+      font-weight: 600;
+    }
+    input, textarea {
+      width: 100%;
+      background: #060911;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 9px 12px;
+      color: var(--text);
+      font-family: inherit;
+      font-size: 13px;
+    }
+    input:focus, textarea:focus {
+      outline: none;
+      border-color: var(--primary);
+    }
+    textarea { resize: vertical; min-height: 80px; }
+    .btn {
+      background-color: var(--primary);
+      color: white;
+      border: none;
+      border-radius: 6px;
+      padding: 10px 18px;
+      font-weight: bold;
+      cursor: pointer;
+      font-size: 13px;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      transition: background 0.2s;
+    }
+    .btn:hover { background-color: var(--primary-hover); }
+    .btn-secondary {
+      background-color: #334155;
+    }
+    .btn-secondary:hover { background-color: #475569; }
+    .live-card {
+      background: linear-gradient(145deg, #0f172a, #131c38);
+      border-color: #0369a1;
+    }
+    .live-ver {
+      font-size: 32px;
+      font-weight: bold;
+      color: var(--accent);
+      margin: 8px 0;
+    }
+    .history-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+      margin-top: 10px;
+    }
+    .history-table th, .history-table td {
+      padding: 10px 12px;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+    }
+    .history-table th {
+      color: var(--text-muted);
+      font-weight: bold;
+      background: #090d16;
+    }
+    .alert {
+      padding: 10px 14px;
+      border-radius: 6px;
+      margin-bottom: 15px;
+      font-size: 12px;
+      display: none;
+    }
+    .alert-success { background: #064e3b; color: #a7f3d0; border: 1px solid #059669; }
+    .alert-error { background: #881337; color: #fecdd3; border: 1px solid #e11d48; }
+    .code-box {
+      background: #060911;
+      padding: 8px 12px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      font-family: monospace;
+      font-size: 11px;
+      color: #38bdf8;
+      word-break: break-all;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    <header>
+      <div style="display: flex; align-items: center; gap: 14px;">
+        <img src="/logo.png" alt="AI Dub Studio Logo" style="width: 48px; height: 48px; border-radius: 10px; box-shadow: 0 4px 12px rgba(2, 132, 199, 0.35);">
+        <div>
+          <h1>AI Dub Studio — Version Control Dashboard <span class="badge">MongoDB</span></h1>
+          <p style="font-size: 12px; color: var(--text-muted); margin-top: 3px;">
+            គ្រប់គ្រងការចេញផ្សាយកំណែថ្មី និងការ Update ស្វ័យប្រវត្តិសម្រាប់ AI Movie Dubbing Studio
+          </p>
+        </div>
+      </div>
+      <button class="btn btn-secondary" onclick="loadVersions()">🔄 Refresh</button>
+    </header>
+
+    <div id="alertBox" class="alert"></div>
+
+    <div class="grid">
+      <!-- Live Status Card -->
+      <div class="card live-card">
+        <div class="card-title">📡 កំណែសកម្មបច្ចុប្បន្ន (Live Version in MongoDB)</div>
+        <div id="liveVer" class="live-ver">v...</div>
+        <p id="liveDate" style="font-size: 11px; color: var(--text-muted);">កាលបរិច្ឆេទ៖ -</p>
+        
+        <div style="margin-top: 12px;">
+          <label>💻 Local Endpoint (លើ PC នេះផ្ទាល់):</label>
+          <div class="code-box" id="apiEndpoint">http://localhost:5000/api/version</div>
+        </div>
+
+        <div style="margin-top: 10px;">
+          <label>📶 Wi-Fi / LAN Endpoint (សម្រាប់ PC ផ្សេងលើ Wi-Fi ជាមួយគ្នា):</label>
+          <div class="code-box" id="lanEndpoint" style="color: #4ade80;">កំពុងស្វែងរក IP...</div>
+        </div>
+
+        <div style="margin-top: 10px;">
+          <label>Download URL សកម្ម៖</label>
+          <div class="code-box" id="liveDownloadUrl">-</div>
+        </div>
+      </div>
+
+      <!-- Upload .EXE File Card -->
+      <div class="card">
+        <div class="card-title">📤 Upload ឯកសារ .EXE ថ្មី (Host on Server)</div>
+        <p style="font-size: 11px; color: var(--text-muted); margin-bottom: 12px;">
+          លោកអ្នកអាច Upload ឯកសារ <code style="color: #38bdf8;">AI_Movie_Dubbing_Studio.exe</code> ដែលទើប compile រួចមកកាន់ Server នេះដោយផ្ទាល់៖
+        </p>
+        <div class="form-group">
+          <input type="file" id="exeFile" accept=".exe,.zip">
+        </div>
+        <button class="btn btn-secondary" id="btnUpload" onclick="uploadExe()">⬆️ Upload ឯកសារទៅ Server</button>
+        <div id="uploadStatus" style="font-size: 11px; color: var(--accent); margin-top: 8px;"></div>
+      </div>
+    </div>
+
+    <!-- Release New Version Form -->
+    <div class="card" style="margin-bottom: 30px;">
+      <div class="card-title">🚀 បញ្ចេញកំណែ Update ថ្មី (Publish New Release)</div>
+      
+      <form id="releaseForm" onsubmit="publishVersion(event)">
+        <div style="display: grid; grid-template-columns: 1fr 2fr; gap: 15px;">
+          <div class="form-group">
+            <label for="newVersion">លេខ Version ថ្មី (e.g. 1.1.0):</label>
+            <input type="text" id="newVersion" placeholder="1.1.0" required>
+          </div>
+          <div class="form-group">
+            <label for="newUrl">Download Link (.exe file URL):</label>
+            <input type="url" id="newUrl" placeholder="http://localhost:5000/downloads/AI_Movie_Dubbing_Studio.exe" required>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="notesKm">កំណត់ត្រាកែប្រែជាភាសាខ្មែរ (Changelog Khmer):</label>
+          <textarea id="notesKm" placeholder="- កែលម្អល្បឿនសំឡេង AI&#10;- បន្ថែមការគាំទ្រ Mongoose Update"></textarea>
+        </div>
+
+        <div class="form-group" style="display: flex; align-items: center; gap: 8px;">
+          <input type="checkbox" id="isMandatory" style="width: auto;">
+          <label for="isMandatory" style="margin-bottom: 0; cursor: pointer;">
+            ⚠️ បង្ខំឱ្យ Update (Mandatory Update - អ្នកប្រើត្រូវតែ Update ទើបឱ្យដំណើរការ)
+          </label>
+        </div>
+
+        <button type="submit" class="btn" style="margin-top: 10px;">
+          ✨ ផ្សាយកំណែថ្មីទៅកាន់ MongoDB (Publish Version)
+        </button>
+      </form>
+    </div>
+
+    <!-- History Releases Table -->
+    <div class="card">
+      <div class="card-title">📜 ប្រវត្តិកំណែដែលបានចេញផ្សាយ (Release History)</div>
+      <table class="history-table">
+        <thead>
+          <tr>
+            <th>Version</th>
+            <th>កាលបរិច្ឆេទ</th>
+            <th>Changelog</th>
+            <th>Download Link</th>
+          </tr>
+        </thead>
+        <tbody id="historyBody">
+          <tr><td colspan="4" style="text-align: center; color: var(--text-muted);">កំពុងទាញយកទិន្នន័យ...</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- How-to Guide for Distributing Updates -->
+    <div class="card" style="margin-bottom: 30px; border-color: #334155;">
+      <div class="card-title">📖 របៀបឱ្យ .EXE លើ PC ផ្សេងអាច Update បាន (Distribution Guide)</div>
+      <div style="font-size: 13px; line-height: 1.8; color: #cbd5e1;">
+        <div style="margin-bottom: 15px;">
+          <b style="color: #38bdf8;">១. បើ PC ផ្សេងស្ថិតក្នុងបណ្ដាញ Wi-Fi ឬ LAN ផ្ទះ/ការិយាល័យជាមួយគ្នា៖</b>
+          <ul style="margin-left: 22px; margin-top: 5px;">
+            <li>នៅលើ PC ផ្សេង ពាក្យ <code style="color: #f43f5e;">localhost</code> មិនអាចប្រើបានទេ (ព្រោះវារត់រកខ្លួនវា)។</li>
+            <li>ត្រូវប្រើ <b>Wi-Fi / LAN Endpoint</b> ខាងលើ (ឧទាហរណ៍៖ <code style="color: #4ade80;">http://192.168.1.12:5000/api/version</code>)។</li>
+            <li>អ្នកប្រើអាចចូលទៅ <b>Settings > ៤. កំណែ និងការអាប់ដេត</b> លើកម្មវិធី រួចបិទភ្ជាប់ Link នេះ ឬកំណត់ក្នុង <code style="color: #38bdf8;">app/config.py</code> មុនពេល compile ជា .exe។</li>
+          </ul>
+        </div>
+
+        <div>
+          <b style="color: #38bdf8;">២. បើចង់ឱ្យ Update បានតាមរយៈ Internet ទូទាំងពិភពលោក (Online គ្រប់ទីកន្លែង)៖</b>
+          <ul style="margin-left: 22px; margin-top: 5px;">
+            <li><b>វិធីងាយស្រួលបំផុត (Cloudflare Tunnel - ឥតគិតថ្លៃ):</b> ដំឡើង <code>cloudflared</code> ហើយរត់បញ្ជា <code>cloudflared tunnel --url http://localhost:5000</code>។ អ្នកនឹងទទួលបាន HTTPS Link ឥតគិតថ្លៃ (ឧ. <code>https://aidub.trycloudflare.com/api/version</code>) ដែល PC គ្រប់ទីកន្លែងអាច update បាន។</li>
+            <li><b>វិធី Cloud ២៤/៧ (Render + MongoDB Atlas):</b> ដាក់ Server នេះលើ Render.com ឬ Railway.app ហើយភ្ជាប់ទៅកាន់ Cloud MongoDB (Atlas) នោះ Server នឹងដំណើរការ ២៤ ម៉ោងដោយមិនបាច់បើក PC អ្នកចោលឡើយ។</li>
+            <li><b>វិធី GitHub Releases:</b> បង្ហោះ .exe ទៅកាន់ GitHub Releases កម្មវិធីក៏អាច Update តាម GitHub បានដោយស្វ័យប្រវត្តិ។</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    const API_BASE = window.location.origin;
+    document.getElementById('apiEndpoint').textContent = `${API_BASE}/api/version`;
+
+    function showAlert(msg, isSuccess = true) {
+      const b = document.getElementById('alertBox');
+      b.className = 'alert ' + (isSuccess ? 'alert-success' : 'alert-error');
+      b.textContent = msg;
+      b.style.display = 'block';
+      setTimeout(() => { b.style.display = 'none'; }, 5000);
+    }
+
+    async function loadVersions() {
+      try {
+        // Fetch network info (LAN IP)
+        fetch(`${API_BASE}/api/network-info`)
+          .then(r => r.json())
+          .then(info => {
+            if (info.lan_urls && info.lan_urls.length > 0) {
+              const primary = info.lan_urls.find(u => u.name.toLowerCase().includes('wi-fi') || u.name.toLowerCase().includes('wireless')) || info.lan_urls[0];
+              document.getElementById('lanEndpoint').textContent = primary.update_url;
+            } else {
+              document.getElementById('lanEndpoint').textContent = 'រកមិនឃើញ IP ក្នុងបណ្ដាញ LAN ឡើយ';
+            }
+          })
+          .catch(() => {
+            document.getElementById('lanEndpoint').textContent = 'http://192.168.1.12:5000/api/version';
+          });
+
+        const res = await fetch(`${API_BASE}/api/version`);
+        if (res.ok) {
+          const latest = await res.json();
+          document.getElementById('liveVer').textContent = `v${latest.version}`;
+          document.getElementById('liveDate').textContent = `កាលបរិច្ឆេទចេញផ្សាយ៖ ${latest.release_date || '-'}`;
+          document.getElementById('liveDownloadUrl').textContent = latest.download_url || '-';
+        }
+
+        const allRes = await fetch(`${API_BASE}/api/version/all`);
+        if (allRes.ok) {
+          const list = await allRes.json();
+          const tbody = document.getElementById('historyBody');
+          if (list.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;">មិនទាន់មានកំណែណាមួយឡើយ</td></tr>';
+            return;
+          }
+          tbody.innerHTML = list.map(item => `
+            <tr>
+              <td><b style="color: #38bdf8;">v${item.version}</b> ${item.mandatory ? '<span style="color:#f43f5e; font-size:10px;">[Mandatory]</span>' : ''}</td>
+              <td>${item.release_date || '-'}</td>
+              <td style="max-width: 250px; white-space: pre-wrap;">${item.changelog_km || item.changelog_en || '-'}</td>
+              <td><a href="${item.download_url}" target="_blank" style="color: #0284c7; text-decoration: none;">Download ↗</a></td>
+            </tr>
+          `).join('');
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    async function publishVersion(e) {
+      e.preventDefault();
+      const version = document.getElementById('newVersion').value.trim();
+      const download_url = document.getElementById('newUrl').value.trim();
+      const changelog_km = document.getElementById('notesKm').value.trim();
+      const mandatory = document.getElementById('isMandatory').checked;
+
+      try {
+        const res = await fetch(`${API_BASE}/api/version`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ version, download_url, changelog_km, mandatory })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          showAlert(`បានផ្សាយកំណែ v${version} ទៅកាន់ MongoDB ដោយជោគជ័យ!`);
+          document.getElementById('releaseForm').reset();
+          loadVersions();
+        } else {
+          showAlert(data.error || 'បរាជ័យក្នុងការផ្សាយ', false);
+        }
+      } catch (err) {
+        showAlert(err.message, false);
+      }
+    }
+
+    async function uploadExe() {
+      const fileInput = document.getElementById('exeFile');
+      if (!fileInput.files || fileInput.files.length === 0) {
+        alert('សូមជ្រើសរើសឯកសារ .exe ជាមុនសិន!');
+        return;
+      }
+      const file = fileInput.files[0];
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const statusEl = document.getElementById('uploadStatus');
+      statusEl.textContent = 'កំពុង Upload សូមរង់ចាំ...';
+      document.getElementById('btnUpload').disabled = true;
+
+      try {
+        const res = await fetch(`${API_BASE}/api/upload-exe`, {
+          method: 'POST',
+          body: formData
+        });
+        const data = await res.json();
+        if (res.ok) {
+          statusEl.textContent = `Upload ជោគជ័យ: ${data.filename}`;
+          document.getElementById('newUrl').value = data.download_url;
+          showAlert(`Upload ជោគជ័យ! Link ត្រូវបានបញ្ចូលស្វ័យប្រវត្តិក្នុងទម្រង់ Publish។`);
+        } else {
+          statusEl.textContent = 'Upload បរាជ័យ!';
+          showAlert(data.error, false);
+        }
+      } catch (err) {
+        statusEl.textContent = 'Error: ' + err.message;
+        showAlert(err.message, false);
+      } finally {
+        document.getElementById('btnUpload').disabled = false;
+      }
+    }
+
+    loadVersions();
+  </script>
+</body>
+</html>

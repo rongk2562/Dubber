@@ -1,0 +1,31 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# PyInstaller build & dist artifacts (upload .exe to GitHub Releases instead)
+build/
+dist/
+
+# Runtime data, temp audio/video files, and local SQLite DB
+temp/
+data/*.db
+data/*.json
+projects/*.aidub
+projects/*.json
+*.mp4
+*.mp3
+*.wav
+*.mkv
+*.avi
+
+# Node.js Update Server dependencies & large binary downloads
+server/node_modules/
+server/.env
+server/public/downloads/*.exe
+
+# IDE & OS files
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
