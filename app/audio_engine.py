@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 from typing import Optional, List, Callable
 from pydub import AudioSegment
+from pydub.silence import detect_leading_silence
 from app.config import TEMP_DIR, MAX_ATEMPO_SPEED
 from app.models import Segment
 
@@ -162,35 +163,53 @@ class AudioEngine:
                 
             try:
                 clip = AudioSegment.from_file(seg.tts_file).set_frame_rate(44100).set_channels(2)
+                # Strip any leading/trailing silence so millisecond 0 of clip is immediate speech
+                if len(clip) > 40 and clip.dBFS != float("-inf"):
+                    thresh = max(-45.0, min(-34.0, clip.dBFS - 15.0))
+                    lead_ms = detect_leading_silence(clip, silence_threshold=thresh, chunk_size=2)
+                    trail_ms = detect_leading_silence(clip.reverse(), silence_threshold=thresh - 2.0, chunk_size=2)
+                    s_trim = max(0, lead_ms - 2)
+                    e_trim = max(0, len(clip) - max(0, trail_ms - 12))
+                    if e_trim > s_trim + 35:
+                        clip = clip[s_trim:e_trim]
                 clip_ms = len(clip)
-                
+
                 # Lock speech start strictly to the exact on-screen character timestamp
-                start_ms = max(0, int(seg.start * 1000))
-                slot_ms = int(max(0.3, seg.slot) * 1000)
+                start_ms = max(0, int(round(seg.start * 1000)))
+                slot_ms = int(max(0.25, seg.slot) * 1000)
 
                 # Available window before the NEXT dialogue segment begins
                 if idx + 1 < len(sorted_segs):
-                    next_start_ms = max(0, int(sorted_segs[idx + 1].start * 1000))
+                    next_start_ms = max(0, int(round(sorted_segs[idx + 1].start * 1000)))
                     gap_to_next = next_start_ms - start_ms
-                    available_ms = max(350, gap_to_next - 20) if gap_to_next > 0 else clip_ms
+                    available_ms = max(250, gap_to_next - 15) if gap_to_next > 0 else clip_ms
                 else:
                     available_ms = max(slot_ms, clip_ms)
 
                 # The voice should finish when the character finishes talking (slot_ms),
-                # with a tiny 60ms breath cushion, without overrunning into the next character.
-                target_max_ms = min(slot_ms + 60, available_ms)
+                # without overrunning into the next character's timestamp.
+                target_max_ms = min(slot_ms + 30, available_ms)
 
                 # If dialogue clip runs longer than the character's speaking time,
                 # dynamically adapt speed with FFmpeg atempo to lock voice to character's mouth!
-                if clip_ms > target_max_ms + 40:
-                    adapt_ratio = min(round(clip_ms / target_max_ms, 2), MAX_ATEMPO_SPEED)
-                    if adapt_ratio >= 1.04:
+                if clip_ms > target_max_ms + 25:
+                    adapt_ratio = min(round(clip_ms / max(200, target_max_ms), 2), MAX_ATEMPO_SPEED)
+                    if adapt_ratio >= 1.03:
                         try:
                             stretched_file = self.time_stretch_atempo(seg.tts_file, speed_factor=adapt_ratio)
                             clip = AudioSegment.from_file(stretched_file).set_frame_rate(44100).set_channels(2)
+                            if len(clip) > 40 and clip.dBFS != float("-inf"):
+                                l_ms = detect_leading_silence(clip, silence_threshold=-40.0, chunk_size=2)
+                                if l_ms > 4:
+                                    clip = clip[l_ms - 2:]
                             clip_ms = len(clip)
                         except Exception as e:
                             print(f"[AudioEngine] Note atempo stretch: {e}")
+
+                # Enforce strict anti-overlap with next segment
+                if idx + 1 < len(sorted_segs) and clip_ms > available_ms:
+                    clip = clip[:available_ms].fade_out(12)
+                    clip_ms = len(clip)
 
                 # Ensure base track has enough room
                 if start_ms + clip_ms + 1000 > len(dubbed_track):
@@ -200,8 +219,9 @@ class AudioEngine:
                 # Record ground truth exact speech timestamps onto Segment!
                 seg.actual_start = round(start_ms / 1000.0, 3)
                 seg.actual_end = round((start_ms + clip_ms) / 1000.0, 3)
+                seg.tts_duration = round(clip_ms / 1000.0, 3)
 
-                # Overlay dialogue speech starting right at character's cue!
+                # Overlay dialogue speech starting right at character's exact cue!
                 dubbed_track = dubbed_track.overlay(clip, position=start_ms)
                 last_clip_end_ms = start_ms + clip_ms
                 last_speaker = seg.speaker

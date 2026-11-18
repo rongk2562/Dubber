@@ -1,9 +1,9 @@
 {
-  "version": "1.1.0",
+  "version": "1.2.0",
   "app_name": "AI Movie Translator & Auto Dubbing Studio",
-  "release_date": "2026-11-17",
-  "download_url": "https://github.com/rongk2562/Dubber/releases/download/v1.1.0/AI_Movie_Dubbing_Studio.exe",
-  "changelog_km": "កំណែថ្មី v1.1.0:\n- 🌐 បន្ថែមមុខងារបកប្រែច្រើនភាសា (ខ្មែរ, អង់គ្លេស, ចិន, ថៃ, វៀតណាម, ជប៉ុន, កូរ៉េ, បារាំង, អេស្ប៉ាញ)\n- 🗣️ បន្ថែមសំឡេង AI Neural TTS ច្រើនភាសា (ប្រុស និងស្រី សម្រាប់គ្រប់ភាសាទាំង ៩)\n- 🧹 បន្ថែមប៊ូតុង សម្អាត (Clear) ៣ ជម្រើស (សម្អាតតែអត្ថបទបកប្រែ, សម្អាតតែសំឡេង AI, ឬសម្អាតវគ្គទាំងអស់)\n- ✨ រៀបចំប្រអប់ប៊ូតុង និងតារាងឱ្យស្មើគ្នាស្អាត និងទូលាយជាងមុន",
-  "changelog_en": "Release v1.1.0:\n- 🌐 Multi-Language Translation (Khmer, English, Chinese, Thai, Vietnamese, Japanese, Korean, French, Spanish)\n- 🗣️ Multi-Language AI Neural TTS Voices (Male & Female for all 9 languages)\n- 🧹 New Clear Button with 3 modes (Clear Translations Only, Clear AI Voices Only, Clear All Segments)\n- ✨ Redesigned uniform toolbar buttons and balanced table layout",
+  "release_date": "2026-11-18",
+  "download_url": "https://github.com/rongk2562/Dubber/releases/download/v1.2.0/AI_Movie_Dubbing_Studio.exe",
+  "changelog_km": "កំណែថ្មី v1.2.0 (Perfect Lip-Sync & Single Male Voice):\n- 🎯 កែសម្រួលម៉ាស៊ីនតម្រឹមម៉ោងនិយាយ (Word-Level Lip-Sync + 0ms Delay Silence Trimming) ឱ្យសំឡេងចេញត្រូវគ្នាបេះបិទតាមមាត់តួអង្គ ១០០%\n- 👨 កំណត់ឱ្យប្រើសំឡេងប្រុស ១ គត់ (Single Male Voice: Piseth) សម្រាប់គ្រប់វគ្គទាំងអស់ដោយស្វ័យប្រវត្តិ\n- 🌐 គាំទ្រការបកប្រែ និងបញ្ចូលសំឡេង AI ច្រើនភាសា (៩ ភាសា) រួមជាមួយប៊ូតុង សម្អាត (Clear)",
+  "changelog_en": "Release v1.2.0 (Perfect Lip-Sync & Single Male Voice):\n- 🎯 Precision Word-Level Lip-Sync & 2ms Silence Trimming so dubbed speech starts the exact instant the character's mouth opens\n- 👨 Unified Single Male Voice mode across all segments\n- 🌐 9-Language Translation & Neural TTS with 3-mode Clear button",
   "mandatory": false
 }

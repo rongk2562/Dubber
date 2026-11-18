@@ -11,7 +11,11 @@ import re
 from pathlib import Path
 from typing import Optional, Tuple, Dict
 from pydub import AudioSegment
-from app.config import TEMP_DIR, KHMER_VOICES, MAX_TTS_SPEED, get_voice_pair_for_lang
+from pydub.silence import detect_leading_silence
+from app.config import (
+    TEMP_DIR, KHMER_VOICES, MAX_TTS_SPEED, MAX_ATEMPO_SPEED,
+    get_voice_pair_for_lang, normalize_to_male_voice
+)
 from app.models import Segment
 from app.audio_engine import AudioEngine
 
@@ -100,24 +104,41 @@ class TTSEngine:
 
         return speak_text, rate_str, pitch_str
 
+    def _trim_silence(self, audio: AudioSegment) -> AudioSegment:
+        """
+        Strip all leading and trailing dead silence from edge-tts output with 2ms precision
+        so the dubbed voice speaks at millisecond 0 (exact instant the character's mouth opens).
+        """
+        if len(audio) < 40:
+            return audio
+        try:
+            thresh = max(-45.0, min(-34.0, audio.dBFS - 15.0)) if audio.dBFS != float("-inf") else -40.0
+            lead_ms = detect_leading_silence(audio, silence_threshold=thresh, chunk_size=2)
+            trail_ms = detect_leading_silence(audio.reverse(), silence_threshold=thresh - 2.0, chunk_size=2)
+
+            start_trim = max(0, lead_ms - 3)
+            end_trim = max(0, len(audio) - max(0, trail_ms - 15))
+            if end_trim > start_trim + 40:
+                audio = audio[start_trim:end_trim]
+        except Exception as e:
+            print(f"[TTSEngine] Note trimming silence: {e}")
+        return audio
+
     def _apply_studio_vocal_enhancement(self, audio: AudioSegment) -> AudioSegment:
         """
-        Studio vocal warmth enhancement:
+        Studio vocal warmth enhancement + Zero-Lag Silence Stripping:
         - High-pass at 75Hz to clean mic sub-rumble.
         - Low-pass at 10.5kHz to reduce harsh digital sizzle.
-        - Compact 60ms natural room decay so syllables ring out cleanly without dragging out time.
+        - Strips all leading/trailing silence so speech starts immediately at segment.start.
         - Peak normalization for balanced movie dialogue punch.
         """
         try:
             audio = audio.high_pass_filter(75)
             audio = audio.low_pass_filter(10500)
+            audio = self._trim_silence(audio)
 
-            # Compact 60ms room cushion ensures clean phoneme release without adding dead air
-            tail_cushion = AudioSegment.silent(duration=60, frame_rate=audio.frame_rate).set_channels(audio.channels)
-            audio = audio + tail_cushion
-
-            if len(audio) > 60:
-                audio = audio.fade_in(15).fade_out(30)
+            if len(audio) > 30:
+                audio = audio.fade_in(4).fade_out(15)
 
             target_dbfs = -1.5
             change_in_dbfs = target_dbfs - audio.max_dBFS
@@ -134,7 +155,8 @@ class TTSEngine:
         pitch_hz: int = 0
     ) -> Tuple[str, float]:
         """
-        Generate Khmer speech clip for a segment with natural emotional prosody.
+        Generate Single Male Voice speech clip for a segment with zero leading delay
+        and automatic slot-duration matching.
         Returns: (output_wav_path, duration_seconds)
         """
         text = segment.text_km.strip() or segment.text_src.strip()
@@ -142,7 +164,10 @@ class TTSEngine:
         speed = speed_factor if speed_factor is not None else segment.speed
         speed = max(0.50, min(float(speed), 2.00))
 
-        voice = segment.voice or "km-KH-PisethNeural"
+        # Strictly enforce Single Male Voice
+        voice = normalize_to_male_voice(segment.voice or "km-KH-PisethNeural")
+        segment.voice = voice
+        segment.speaker = "ប្រុស (Male)"
 
         # Check if text contains actual pronounceable letters/digits across supported scripts
         clean_text = re.sub(r'[\s\.\,\-\_\!\?\:\;\(\)\[\]\{\}\/\\\"\'\`\~\@\#\$\%\^\&\*\+\=\|\<\>\—\…\♪\♫\。\？\！\、\，]+', '', text)
@@ -167,19 +192,25 @@ class TTSEngine:
 
         if success and os.path.exists(mp3_file) and os.path.getsize(mp3_file) >= 1024:
             try:
-                # Convert to WAV & apply studio vocal warmth enhancement
+                # Convert to WAV, strip leading/trailing silence, and apply vocal warmth
                 audio = AudioSegment.from_file(mp3_file)
                 audio = audio.set_frame_rate(44100).set_channels(2)
                 audio = self._apply_studio_vocal_enhancement(audio)
                 audio.export(wav_file, format="wav")
 
-                # If custom speed is requested, apply precision offline FFmpeg atempo time-stretch
-                if abs(speed - 1.0) > 0.02 and os.path.exists(wav_file):
-                    try:
-                        self.audio_engine.time_stretch_atempo(wav_file, speed_factor=speed, output_wav=wav_file)
-                        audio = AudioSegment.from_file(wav_file)
-                    except Exception as st_err:
-                        print(f"[TTSEngine] Note during speed stretch for seg {segment.id}: {st_err}")
+                # If speech clip still exceeds the character's speaking slot, stretch it to match the mouth duration!
+                raw_dur_sec = len(audio) / 1000.0
+                slot_sec = max(0.35, segment.slot)
+                if raw_dur_sec > slot_sec + 0.04 and os.path.exists(wav_file):
+                    needed_stretch = min(round(raw_dur_sec / slot_sec, 3), MAX_ATEMPO_SPEED)
+                    if needed_stretch >= 1.03:
+                        try:
+                            self.audio_engine.time_stretch_atempo(wav_file, speed_factor=needed_stretch, output_wav=wav_file)
+                            audio = AudioSegment.from_file(wav_file)
+                            audio = self._trim_silence(audio)
+                            audio.export(wav_file, format="wav")
+                        except Exception as st_err:
+                            print(f"[TTSEngine] Note during slot stretch for seg {segment.id}: {st_err}")
 
                 duration_sec = round(len(audio) / 1000.0, 3)
             except Exception as e:
@@ -234,23 +265,14 @@ class TTSEngine:
         clean_pitch = pitch if (pitch and pitch != "+0Hz") else None
         clean_rate = rate if (rate and rate != "+0%") else None
 
-        # Choose alternate voice within the same language for Tier 4 fallback
-        v_meta = KHMER_VOICES.get(voice, {})
-        v_lang = v_meta.get("lang", "km")
-        male_v, female_v = get_voice_pair_for_lang(v_lang)
-        alt_voice = male_v if voice == female_v else female_v
+        # Strictly use Single Male Voice across all tiers
+        voice = normalize_to_male_voice(voice)
         part_path = output_path + ".part"
 
-        # Tiered attempts:
-        # Tier 1: Requested parameters
-        # Tier 2: Safe standard rate/pitch (bypasses Edge-TTS rate bugs)
-        # Tier 3: Standard rate with 0.4s backoff (bypasses server throttling)
-        # Tier 4: Alternate Khmer voice with 0.8s backoff
         tiers = [
             (voice, clean_rate, clean_pitch, 0.0),
             (voice, None, None, 0.2),
-            (voice, None, None, 0.4),
-            (alt_voice, None, None, 0.8),
+            (voice, None, None, 0.5),
         ]
 
         for idx, (v, r, p, delay) in enumerate(tiers):

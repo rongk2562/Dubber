@@ -131,47 +131,62 @@ class STTEngine:
         return self._model
 
     def detect_slice_gender(self, filtered_audio: np.ndarray, sr: int, st: float, et: float) -> str:
+        """Single Male Voice mode: always returns 'Male'."""
+        return "Male"
+
+    def _refine_speech_window(
+        self,
+        filtered_audio: Optional[np.ndarray],
+        sr: int,
+        raw_start: float,
+        raw_end: float,
+        min_allowed_start: float = 0.0
+    ) -> tuple:
         """
-        Detect human voice gender from audio chunk fundamental frequency (F0).
-        F0 >= 165Hz -> Female (Sreymom)
-        F0 < 165Hz  -> Male (Piseth)
+        Lock start_sec and end_sec to the exact 10ms acoustic vocal onset/offset
+        so the dubbed voice starts the exact instant the character's mouth opens.
         """
-        if filtered_audio is None:
-            return "Male"
+        st = max(min_allowed_start, float(raw_start))
+        et = max(st + 0.25, float(raw_end))
+        if filtered_audio is None or len(filtered_audio) == 0:
+            return round(st, 2), round(et, 2)
+
         try:
-            s_idx = max(0, int(st * sr))
+            # Look slightly before raw_start (-60ms) in case Whisper clipped the initial consonant
+            search_st = max(min_allowed_start, st - 0.06)
+            s_idx = max(0, int(search_st * sr))
             e_idx = min(len(filtered_audio), int(et * sr))
-            clip = filtered_audio[s_idx:e_idx]
-            if len(clip) < sr * 0.2:
-                return "Male"
+            if e_idx - s_idx < int(sr * 0.12):
+                return round(st, 2), round(et, 2)
 
-            clip_norm = clip / (np.max(np.abs(clip)) + 1e-6)
-            frame_len = int(sr * 0.05) # 50ms
-            hop_len = int(sr * 0.025)  # 25ms
-            min_lag = int(sr / 350)    # 350 Hz max human pitch
-            max_lag = int(sr / 75)     # 75 Hz min human pitch
+            chunk = np.abs(filtered_audio[s_idx:e_idx])
+            peak = float(np.percentile(chunk, 95)) if len(chunk) > 0 else 0.0
+            if peak <= 1e-4:
+                return round(st, 2), round(et, 2)
 
-            f0_list = []
-            for i in range(0, len(clip_norm) - frame_len, hop_len):
-                fr = clip_norm[i:i+frame_len]
-                if np.mean(fr**2) < 0.001:
-                    continue
-                corr = np.correlate(fr, fr, mode='full')[frame_len-1:]
-                if len(corr) <= max_lag:
-                    continue
-                peak_lag = min_lag + np.argmax(corr[min_lag:max_lag])
-                if corr[peak_lag] > 0.35 * corr[0]:
-                    f0 = sr / peak_lag
-                    if 80 <= f0 <= 320:
-                        f0_list.append(f0)
+            win = max(1, int(sr * 0.010))  # 10ms frame
+            n_frames = len(chunk) // win
+            if n_frames < 4:
+                return round(st, 2), round(et, 2)
 
-            if not f0_list:
-                return "Male"
+            frames = chunk[: n_frames * win].reshape(n_frames, win).mean(axis=1)
+            onset_thresh = peak * 0.12
 
-            med_f0 = float(np.median(f0_list))
-            return "Female" if med_f0 >= 165.0 else "Male"
+            active_indices = np.where(frames >= onset_thresh)[0]
+            if len(active_indices) > 0:
+                first_frame = int(active_indices[0])
+                last_frame = int(active_indices[-1])
+                refined_st = search_st + (first_frame * 0.010)
+                refined_et = search_st + ((last_frame + 2) * 0.010)
+                # Keep within sane bounds of Whisper's word timestamp
+                if abs(refined_st - st) <= 0.35:
+                    st = max(min_allowed_start, refined_st)
+                if abs(refined_et - et) <= 0.40 and refined_et > st + 0.20:
+                    et = refined_et
         except Exception:
-            return "Male"
+            pass
+
+        return round(st, 2), round(max(st + 0.25, et), 2)
 
     def transcribe(
         self,
@@ -180,8 +195,8 @@ class STTEngine:
         progress_cb: Optional[Callable[[int, str], None]] = None
     ) -> List[Segment]:
         """
-        Transcribe audio file into a list of Segment objects with precise timestamps in seconds
-        and automatic acoustic voice gender detection (Male / Female).
+        Transcribe audio file into a list of Segment objects with frame-accurate speech onset
+        timestamps and Single Male Voice ('km-KH-PisethNeural').
         """
         if not os.path.exists(audio_path):
             raise FileNotFoundError(f"Audio file not found: {audio_path}")
@@ -191,7 +206,7 @@ class STTEngine:
 
         model = self._load_model(progress_cb=progress_cb)
 
-        # Preload and filter audio array for acoustic voice gender detection
+        # Preload and high-pass filter audio array (85Hz-3800Hz speech band) for exact onset locking
         filtered_audio = None
         sr = 16000
         try:
@@ -199,19 +214,20 @@ class STTEngine:
             raw_samples = np.array(audio_seg.get_array_of_samples(), dtype=np.float32)
             try:
                 import scipy.signal
-                b, a = scipy.signal.butter(3, 70 / (sr / 2), btype='high')
+                b, a = scipy.signal.butter(3, [85 / (sr / 2), 3800 / (sr / 2)], btype='band')
                 filtered_audio = scipy.signal.filtfilt(b, a, raw_samples)
             except Exception:
-                # Pure NumPy high-pass fallback (first-order difference + DC removal)
                 filtered_audio = raw_samples - np.mean(raw_samples)
         except Exception as e:
-            print(f"[STTEngine] Note on acoustic gender analyzer: {e}")
+            print(f"[STTEngine] Note on audio waveform loader: {e}")
 
         if progress_cb:
-            progress_cb(15, "Transcribing speech segments & detecting character voices...")
+            progress_cb(15, "Transcribing speech with word-level lip-sync timestamps...")
 
         lang_arg = None if (not language or language == "auto") else language
 
+        # Use vad_filter=False with word_timestamps=True so faster-whisper never remaps
+        # the first word of a segment across silent gaps to the previous segment's end!
         segments_iter, info = model.transcribe(
             audio_path,
             language=lang_arg,
@@ -230,42 +246,106 @@ class STTEngine:
         if progress_cb:
             progress_cb(20, f"Detected language: {detected_lang.upper()} ({detected_prob*100:.1f}%)")
 
-        result_segments: List[Segment] = []
-        seg_id = 1
+        raw_phrases = []
+        last_end_sec = 0.0
 
         for seg in segments_iter:
             text = seg.text.strip()
             if not text:
                 continue
 
-            start_sec = round(float(seg.start), 2)
-            end_sec = round(float(seg.end), 2)
+            words = list(getattr(seg, "words", None) or [])
+            if not words:
+                st, et = self._refine_speech_window(
+                    filtered_audio, sr, float(seg.start), float(seg.end), min_allowed_start=last_end_sec
+                )
+                raw_phrases.append([st, max(st + 0.35, et), text])
+                last_end_sec = max(st + 0.35, et)
+                continue
 
-            if end_sec <= start_sec:
-                end_sec = start_sec + 0.5
+            # Fix Whisper DTW anomaly where individual words have anomalous durations or leading gaps
+            cleaned_words = []
+            for idx_w, w in enumerate(words):
+                w_st = float(w.start)
+                w_et = float(w.end)
+                w_txt = w.word
+                # A single word/character does not span multi-second silence before its end
+                max_w_dur = max(0.45, len(w_txt.strip()) * 0.32)
+                if w_et - w_st > max_w_dur:
+                    w_st = w_et - max_w_dur
+                cleaned_words.append([w_st, w_et, w_txt])
 
-            # Automatic Voice Gender Detection from the audio itself!
-            gender = self.detect_slice_gender(filtered_audio, sr, start_sec, end_sec)
-            voice_id = "km-KH-SreymomNeural" if gender == "Female" else "km-KH-PisethNeural"
-            speaker_label = "ស្រី (Female)" if gender == "Female" else "ប្រុស (Male)"
+            # If the first word was falsely attached to an earlier breath/noise (>0.35s gap before word 2
+            # while word 1 is only 1-2 chars), snap word 1 to right before word 2!
+            if len(cleaned_words) >= 2:
+                gap_01 = cleaned_words[1][0] - cleaned_words[0][1]
+                if gap_01 > 0.35 and len(cleaned_words[0][2].strip()) <= 2:
+                    w0_dur = min(0.28, max(0.16, cleaned_words[0][1] - cleaned_words[0][0]))
+                    cleaned_words[0][1] = cleaned_words[1][0] - 0.02
+                    cleaned_words[0][0] = max(last_end_sec, cleaned_words[0][1] - w0_dur)
 
+            # Split into sub-phrases only when there is a real pause (>= 0.45s) between two clauses
+            curr_group = [cleaned_words[0]]
+            for cw in cleaned_words[1:]:
+                gap = cw[0] - curr_group[-1][1]
+                curr_txt = "".join(x[2] for x in curr_group).strip()
+                if gap >= 0.45 and len(curr_txt) >= 2:
+                    g_st, g_et = self._refine_speech_window(
+                        filtered_audio, sr, curr_group[0][0], curr_group[-1][1], min_allowed_start=last_end_sec
+                    )
+                    raw_phrases.append([g_st, g_et, curr_txt])
+                    last_end_sec = g_et
+                    curr_group = [cw]
+                else:
+                    curr_group.append(cw)
+
+            if curr_group:
+                curr_txt = "".join(x[2] for x in curr_group).strip()
+                if curr_txt:
+                    # Drop isolated 1-char noise hallucinations (e.g. single '是' or '嗯' <0.30s surrounded by >2s silence)
+                    dur_grp = curr_group[-1][1] - curr_group[0][0]
+                    if len(curr_txt) == 1 and dur_grp <= 0.30 and (curr_group[0][0] - last_end_sec) > 1.5:
+                        continue
+                    g_st, g_et = self._refine_speech_window(
+                        filtered_audio, sr, curr_group[0][0], curr_group[-1][1], min_allowed_start=last_end_sec
+                    )
+                    raw_phrases.append([g_st, g_et, curr_txt])
+                    last_end_sec = g_et
+
+        # Merge contiguous micro-clauses that belong to the same continuous utterance (gap <= 0.18s,
+        # or gap <= 0.35s when the first clause is < 0.85s) so translated sentences fit the actor's full speaking window!
+        merged_phrases = []
+        for st, et, txt in raw_phrases:
+            if merged_phrases:
+                prev_st, prev_et, prev_txt = merged_phrases[-1]
+                gap = st - prev_et
+                prev_dur = prev_et - prev_st
+                combined_dur = et - prev_st
+                if (gap <= 0.18 and combined_dur <= 4.2) or (prev_dur < 0.85 and gap <= 0.35 and combined_dur <= 4.2):
+                    sep = " " if not prev_txt.endswith(" ") else ""
+                    merged_phrases[-1] = [prev_st, et, f"{prev_txt}{sep}{txt}".strip()]
+                    continue
+            merged_phrases.append([st, et, txt])
+
+        result_segments: List[Segment] = []
+        for idx, (st, et, txt) in enumerate(merged_phrases, start=1):
+            if et <= st:
+                et = round(st + 0.45, 2)
             result_segments.append(Segment(
-                id=seg_id,
-                start=start_sec,
-                end=end_sec,
-                speaker=speaker_label,
-                text_src=text,
+                id=idx,
+                start=round(st, 2),
+                end=round(et, 2),
+                speaker="ប្រុស (Male)",
+                text_src=txt,
                 text_km="",
-                voice=voice_id
+                voice="km-KH-PisethNeural"
             ))
-            seg_id += 1
-
             if progress_cb and total_duration > 0:
-                pct = 20 + int((seg.end / total_duration) * 75)
+                pct = 20 + int((et / total_duration) * 75)
                 pct = min(98, max(20, pct))
-                progress_cb(pct, f"Transcribed segment {seg_id-1} [{start_sec}s - {end_sec}s] ({gender})")
+                progress_cb(pct, f"Transcribed segment {idx} [{st:.2f}s - {et:.2f}s]")
 
         if progress_cb:
-            progress_cb(100, f"Completed: {len(result_segments)} segments transcribed with voice gender detection.")
+            progress_cb(100, f"Completed: {len(result_segments)} segments with exact speech onset timestamps.")
 
         return result_segments

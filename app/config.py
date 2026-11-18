@@ -69,17 +69,17 @@ except Exception:
 
 DEFAULT_DB_PATH = DATA_DIR / "app_data.db"
 
-# Supported Target Languages for Multi-Language Translation & AI Voice Dubbing
+# Supported Target Languages for Multi-Language Translation & Single Male AI Voice Dubbing
 TARGET_LANGUAGES = [
-    ("km", "🇰🇭 ខ្មែរ (Khmer)", "Khmer (ភាសាខ្មែរ)", "km-KH-PisethNeural", "km-KH-SreymomNeural"),
-    ("en", "🇺🇸 អង់គ្លេស (English)", "English", "en-US-AndrewMultilingualNeural", "en-US-AvaMultilingualNeural"),
-    ("zh-CN", "🇨🇳 ចិន (Chinese)", "Simplified Chinese (中文)", "zh-CN-YunxiNeural", "zh-CN-XiaoxiaoNeural"),
-    ("th", "🇹🇭 ថៃ (Thai)", "Thai (ภาษาไทย)", "th-TH-NiwatNeural", "th-TH-PremwadeeNeural"),
-    ("vi", "🇻🇳 វៀតណាម (Vietnamese)", "Vietnamese (Tiếng Việt)", "vi-VN-NamMinhNeural", "vi-VN-HoaiMyNeural"),
-    ("ja", "🇯🇵 ជប៉ុន (Japanese)", "Japanese (日本語)", "ja-JP-KeitaNeural", "ja-JP-NanamiNeural"),
-    ("ko", "🇰🇷 កូរ៉េ (Korean)", "Korean (한국어)", "ko-KR-InJoonNeural", "ko-KR-SunHiNeural"),
-    ("fr", "🇫🇷 បារាំង (French)", "French (Français)", "fr-FR-HenriNeural", "fr-FR-DeniseNeural"),
-    ("es", "🇪🇸 អេស្ប៉ាញ (Spanish)", "Spanish (Español)", "es-ES-AlvaroNeural", "es-ES-ElviraNeural"),
+    ("km", "🇰🇭 ខ្មែរ (Khmer)", "Khmer (ភាសាខ្មែរ)", "km-KH-PisethNeural", "km-KH-PisethNeural"),
+    ("en", "🇺🇸 អង់គ្លេស (English)", "English", "en-US-AndrewMultilingualNeural", "en-US-AndrewMultilingualNeural"),
+    ("zh-CN", "🇨🇳 ចិន (Chinese)", "Simplified Chinese (中文)", "zh-CN-YunxiNeural", "zh-CN-YunxiNeural"),
+    ("th", "🇹🇭 ថៃ (Thai)", "Thai (ภาษาไทย)", "th-TH-NiwatNeural", "th-TH-NiwatNeural"),
+    ("vi", "🇻🇳 វៀតណាម (Vietnamese)", "Vietnamese (Tiếng Việt)", "vi-VN-NamMinhNeural", "vi-VN-NamMinhNeural"),
+    ("ja", "🇯🇵 ជប៉ុន (Japanese)", "Japanese (日本語)", "ja-JP-KeitaNeural", "ja-JP-KeitaNeural"),
+    ("ko", "🇰🇷 កូរ៉េ (Korean)", "Korean (한국어)", "ko-KR-InJoonNeural", "ko-KR-InJoonNeural"),
+    ("fr", "🇫🇷 បារាំង (French)", "French (Français)", "fr-FR-HenriNeural", "fr-FR-HenriNeural"),
+    ("es", "🇪🇸 អេស្ប៉ាញ (Spanish)", "Spanish (Español)", "es-ES-AlvaroNeural", "es-ES-AlvaroNeural"),
 ]
 
 TARGET_LANG_MAP = {
@@ -88,14 +88,14 @@ TARGET_LANG_MAP = {
         "label": label,
         "prompt_name": prompt_name,
         "male_voice": male_v,
-        "female_voice": female_v,
+        "female_voice": male_v,
     }
-    for code, label, prompt_name, male_v, female_v in TARGET_LANGUAGES
+    for code, label, prompt_name, male_v, _ in TARGET_LANGUAGES
 }
 
-# Available Neural Voices Across All Supported Languages (Microsoft Edge TTS)
+# Single Male Neural Voice Per Supported Language (Microsoft Edge TTS)
 KHMER_VOICES = {
-    # Khmer (km-KH)
+    # Khmer (km-KH) — Single Male Voice: Piseth
     "km-KH-PisethNeural": {
         "name": "Piseth (ខ្មែរ - ប្រុស / Male)",
         "actor": "Piseth",
@@ -104,15 +104,7 @@ KHMER_VOICES = {
         "locale": "km-KH",
         "lang": "km",
     },
-    "km-KH-SreymomNeural": {
-        "name": "Sreymom (ខ្មែរ - ស្រី / Female)",
-        "actor": "Sreymom",
-        "gender": "Female",
-        "short_name": "km-KH-SreymomNeural",
-        "locale": "km-KH",
-        "lang": "km",
-    },
-    # English (en-US)
+    # English (en-US) — Single Male Voice: Andrew
     "en-US-AndrewMultilingualNeural": {
         "name": "Andrew (English - Male)",
         "actor": "Andrew",
@@ -121,15 +113,7 @@ KHMER_VOICES = {
         "locale": "en-US",
         "lang": "en",
     },
-    "en-US-AvaMultilingualNeural": {
-        "name": "Ava (English - Female)",
-        "actor": "Ava",
-        "gender": "Female",
-        "short_name": "en-US-AvaMultilingualNeural",
-        "locale": "en-US",
-        "lang": "en",
-    },
-    # Chinese Mandarin (zh-CN)
+    # Chinese Mandarin (zh-CN) — Single Male Voice: Yunxi
     "zh-CN-YunxiNeural": {
         "name": "Yunxi (Chinese - Male)",
         "actor": "Yunxi",
@@ -138,15 +122,7 @@ KHMER_VOICES = {
         "locale": "zh-CN",
         "lang": "zh-CN",
     },
-    "zh-CN-XiaoxiaoNeural": {
-        "name": "Xiaoxiao (Chinese - Female)",
-        "actor": "Xiaoxiao",
-        "gender": "Female",
-        "short_name": "zh-CN-XiaoxiaoNeural",
-        "locale": "zh-CN",
-        "lang": "zh-CN",
-    },
-    # Thai (th-TH)
+    # Thai (th-TH) — Single Male Voice: Niwat
     "th-TH-NiwatNeural": {
         "name": "Niwat (Thai - Male)",
         "actor": "Niwat",
@@ -155,15 +131,7 @@ KHMER_VOICES = {
         "locale": "th-TH",
         "lang": "th",
     },
-    "th-TH-PremwadeeNeural": {
-        "name": "Premwadee (Thai - Female)",
-        "actor": "Premwadee",
-        "gender": "Female",
-        "short_name": "th-TH-PremwadeeNeural",
-        "locale": "th-TH",
-        "lang": "th",
-    },
-    # Vietnamese (vi-VN)
+    # Vietnamese (vi-VN) — Single Male Voice: NamMinh
     "vi-VN-NamMinhNeural": {
         "name": "NamMinh (Vietnamese - Male)",
         "actor": "NamMinh",
@@ -172,15 +140,7 @@ KHMER_VOICES = {
         "locale": "vi-VN",
         "lang": "vi",
     },
-    "vi-VN-HoaiMyNeural": {
-        "name": "HoaiMy (Vietnamese - Female)",
-        "actor": "HoaiMy",
-        "gender": "Female",
-        "short_name": "vi-VN-HoaiMyNeural",
-        "locale": "vi-VN",
-        "lang": "vi",
-    },
-    # Japanese (ja-JP)
+    # Japanese (ja-JP) — Single Male Voice: Keita
     "ja-JP-KeitaNeural": {
         "name": "Keita (Japanese - Male)",
         "actor": "Keita",
@@ -189,15 +149,7 @@ KHMER_VOICES = {
         "locale": "ja-JP",
         "lang": "ja",
     },
-    "ja-JP-NanamiNeural": {
-        "name": "Nanami (Japanese - Female)",
-        "actor": "Nanami",
-        "gender": "Female",
-        "short_name": "ja-JP-NanamiNeural",
-        "locale": "ja-JP",
-        "lang": "ja",
-    },
-    # Korean (ko-KR)
+    # Korean (ko-KR) — Single Male Voice: InJoon
     "ko-KR-InJoonNeural": {
         "name": "InJoon (Korean - Male)",
         "actor": "InJoon",
@@ -206,15 +158,7 @@ KHMER_VOICES = {
         "locale": "ko-KR",
         "lang": "ko",
     },
-    "ko-KR-SunHiNeural": {
-        "name": "SunHi (Korean - Female)",
-        "actor": "SunHi",
-        "gender": "Female",
-        "short_name": "ko-KR-SunHiNeural",
-        "locale": "ko-KR",
-        "lang": "ko",
-    },
-    # French (fr-FR)
+    # French (fr-FR) — Single Male Voice: Henri
     "fr-FR-HenriNeural": {
         "name": "Henri (French - Male)",
         "actor": "Henri",
@@ -223,15 +167,7 @@ KHMER_VOICES = {
         "locale": "fr-FR",
         "lang": "fr",
     },
-    "fr-FR-DeniseNeural": {
-        "name": "Denise (French - Female)",
-        "actor": "Denise",
-        "gender": "Female",
-        "short_name": "fr-FR-DeniseNeural",
-        "locale": "fr-FR",
-        "lang": "fr",
-    },
-    # Spanish (es-ES)
+    # Spanish (es-ES) — Single Male Voice: Alvaro
     "es-ES-AlvaroNeural": {
         "name": "Alvaro (Spanish - Male)",
         "actor": "Alvaro",
@@ -240,40 +176,51 @@ KHMER_VOICES = {
         "locale": "es-ES",
         "lang": "es",
     },
-    "es-ES-ElviraNeural": {
-        "name": "Elvira (Spanish - Female)",
-        "actor": "Elvira",
-        "gender": "Female",
-        "short_name": "es-ES-ElviraNeural",
-        "locale": "es-ES",
-        "lang": "es",
-    },
 }
 
 
 def get_voice_pair_for_lang(lang_code: str = "km"):
-    """Return (male_voice_id, female_voice_id) for the given target language code."""
+    """Return (male_voice_id, male_voice_id) — strictly locked to Single Male Voice."""
     info = TARGET_LANG_MAP.get(lang_code) or TARGET_LANG_MAP["km"]
-    return info["male_voice"], info["female_voice"]
+    v = info["male_voice"]
+    return v, v
+
+
+def normalize_to_male_voice(voice_id: str, fallback_lang: str = "km") -> str:
+    """Convert any legacy or female voice_id to the corresponding language's Single Male Voice."""
+    if voice_id in KHMER_VOICES:
+        return voice_id
+    if voice_id:
+        prefix = voice_id[:5].lower()
+        prefix_map = {
+            "km-kh": "km-KH-PisethNeural",
+            "en-us": "en-US-AndrewMultilingualNeural",
+            "zh-cn": "zh-CN-YunxiNeural",
+            "th-th": "th-TH-NiwatNeural",
+            "vi-vn": "vi-VN-NamMinhNeural",
+            "ja-jp": "ja-JP-KeitaNeural",
+            "ko-kr": "ko-KR-InJoonNeural",
+            "fr-fr": "fr-FR-HenriNeural",
+            "es-es": "es-ES-AlvaroNeural",
+        }
+        if prefix in prefix_map:
+            return prefix_map[prefix]
+    male_v, _ = get_voice_pair_for_lang(fallback_lang)
+    return male_v
 
 
 def is_female_voice(voice_id: str) -> bool:
-    """Return True if voice_id corresponds to a Female neural voice."""
-    if not voice_id:
-        return False
-    v_meta = KHMER_VOICES.get(voice_id)
-    if v_meta:
-        return v_meta.get("gender") == "Female"
-    v_low = voice_id.lower()
-    return any(k in v_low for k in ["sreymom", "female", "ava", "jenny", "xiaoxiao", "premwadee", "hoaimy", "nanami", "sunhi", "denise", "elvira"])
+    """Always False — Single Male Voice mode only."""
+    return False
 
 
 def get_voice_actor_name(voice_id: str) -> str:
-    """Return short actor name (e.g. Piseth, Sreymom, Andrew, Xiaoxiao) for UI display."""
-    v_meta = KHMER_VOICES.get(voice_id)
+    """Return short Male actor name (e.g. Piseth, Andrew, Yunxi) for UI display."""
+    norm_id = normalize_to_male_voice(voice_id)
+    v_meta = KHMER_VOICES.get(norm_id)
     if v_meta and "actor" in v_meta:
         return v_meta["actor"]
-    return voice_id.split("-")[-1].replace("Neural", "").replace("Multilingual", "") if voice_id else "Piseth"
+    return "Piseth"
 
 # Translation Providers
 TRANSLATION_PROVIDERS = [
@@ -294,15 +241,15 @@ WHISPER_MODELS = [
 ]
 
 # Time-Sync Constraints (From SRS Specification)
-MAX_TTS_SPEED = 1.25          # Maximum TTS speed multiplier
-MAX_ATEMPO_SPEED = 1.30       # Maximum FFmpeg atempo time-stretch multiplier
+MAX_TTS_SPEED = 1.35          # Maximum TTS speed multiplier
+MAX_ATEMPO_SPEED = 1.65       # Maximum FFmpeg atempo time-stretch multiplier for exact lip-sync
 DEFAULT_DUCKING_ATTENUATION = -14.0 # dB reduction for original audio during speech
 DEFAULT_DUCKING_FADE_MS = 250 # ms fade in / fade out for ducking
 
 # Application Version & Update Configuration
 APP_NAME = "AI Movie Translator & Auto Dubbing Studio"
-APP_VERSION = "1.1.0"
-APP_BUILD_DATE = "2026-11-17"
+APP_VERSION = "1.2.0"
+APP_BUILD_DATE = "2026-11-18"
 DEFAULT_UPDATE_URL = "https://raw.githubusercontent.com/rongk2562/Dubber/main/version.json"
 LOCAL_UPDATE_URL = "http://localhost:5000/api/version"
 GITHUB_RELEASES_URL = "https://github.com/rongk2562/Dubber/releases"

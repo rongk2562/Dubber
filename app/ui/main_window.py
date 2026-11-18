@@ -240,8 +240,6 @@ class MainWindow(QMainWindow):
         menu_edit.addAction(s["btn_merge_segments"], self.segment_table._merge_selected)
         menu_edit.addAction(s["btn_delete_segment"], self.segment_table._delete_selected)
         menu_edit.addAction("🧹 សម្អាត (Clear)..." if self.lang == "km" else "🧹 Clear...", self.segment_table._show_clear_menu)
-        menu_edit.addSeparator()
-        menu_edit.addAction(s["tab_speakers"], self._open_speaker_manager)
 
         # Tools Menu
         menu_tools = menubar.addMenu(s["tools"])
@@ -324,10 +322,7 @@ class MainWindow(QMainWindow):
 
         toolbar.addSeparator()
 
-        # Speakers & Sync Report
-        act_spk = toolbar.addAction("👥 តួអង្គ" if self.lang == "km" else "👥 Speakers", self._open_speaker_manager)
-        act_spk.setToolTip(s["tab_speakers"])
-
+        # Sync Report, Batch & Settings
         act_rep = toolbar.addAction("📊 របាយការណ៍" if self.lang == "km" else "📊 Report", self._show_sync_report)
         act_rep.setToolTip(s["tab_sync_report"])
 
@@ -976,18 +971,19 @@ class MainWindow(QMainWindow):
                 print(f"[MainWindow] Auto-translate notice: {e}")
 
         for i, s in enumerate(self.project.segments):
-            pct = int((i / max(1, total)) * 100)
+            pct = int((i / max(1, total)) * 85)
             target_speed = s.speed if (s.is_modified and s.speed != 1.0) else global_speed
-            
-            # If already generated and valid with matching speed, skip to resume quickly
-            if s.tts_file and os.path.exists(s.tts_file) and not s.is_modified and abs(s.speed - target_speed) < 0.02 and s.tts_duration > 0.1:
-                progress_cb(pct, f"វគ្គ {i+1}/{total} រួចរាល់ហើយ...")
-                continue
 
-            progress_cb(pct, f"កំពុងបង្កើតសំឡេង AI វគ្គ {i+1}/{total} (ID: {s.id})...")
+            progress_cb(pct, f"កំពុងបង្កើតសំឡេង AI ប្រុស វគ្គ {i+1}/{total} (ID: {s.id})...")
             self.tts_engine.generate_segment_tts(s, speed_factor=target_speed)
             s.is_modified = False
-            time.sleep(0.06)
+            time.sleep(0.05)
+
+        # Automatically run 4-stage time-sync & lip-sync alignment right after generating voices!
+        progress_cb(90, "កំពុងតម្រឹមសំឡេងឱ្យស៊ីគ្នាជាមួយមាត់តួអង្គ (Auto Lip-Sync)...")
+        self.current_report = self.sync_engine.synchronize_segments(self.project)
+        self.audio_engine.align_speech_and_subtitles(self.project.segments)
+        progress_cb(100, "បានបង្កើត និងតម្រឹមសំឡេងរួចរាល់ ១០០%!")
         return self.project.segments
 
     def _on_tts_finished(self, _):

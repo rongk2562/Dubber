@@ -17,7 +17,7 @@ from PySide6.QtGui import QColor, QFont
 from app.models import Segment, Project
 from app.config import (
     KHMER_VOICES, STRINGS, TARGET_LANG_MAP,
-    get_voice_pair_for_lang, is_female_voice, get_voice_actor_name
+    get_voice_pair_for_lang, is_female_voice, get_voice_actor_name, normalize_to_male_voice
 )
 from app.utils import format_timestamp
 
@@ -132,23 +132,7 @@ class SegmentTableWidget(QWidget):
         top_bar.addWidget(self.btn_clear, 1)
 
         self.btn_auto_gender = QPushButton("🎭 ស្មានសំឡេង")
-        self.btn_auto_gender.setStyleSheet("""
-            QPushButton {
-                background-color: #6d28d9;
-                color: white;
-                border: 1px solid #8b5cf6;
-                border-radius: 6px;
-                padding: 4px 8px;
-                font-weight: bold;
-                font-size: 12px;
-            }
-            QPushButton:hover {
-                background-color: #5b21b6;
-            }
-        """)
-        self.btn_auto_gender.setToolTip("ស្មានសំឡេងតួអង្គ (ប្រុស/ស្រី) ស្វ័យប្រវត្តិតាមបរិបទ")
-        self.btn_auto_gender.clicked.connect(self._auto_detect_genders)
-        top_bar.addWidget(self.btn_auto_gender, 1)
+        self.btn_auto_gender.setVisible(False) # Single Male Voice mode only
 
         self.btn_humanize = QPushButton("✨ សម្ដីរស់រវើក")
         self.btn_humanize.setStyleSheet("""
@@ -376,14 +360,13 @@ class SegmentTableWidget(QWidget):
             item_slot.setForeground(QColor("#38bdf8"))
             self.table.setItem(row, self.COL_SLOT, item_slot)
 
-            # 4: Speaker (ComboBox)
-            cb_speaker = QComboBox()
-            cb_speaker.setEditable(True)
-            cb_speaker.addItems(["S1", "S2", "S3", "S4", "S5"])
-            if seg.speaker:
-                cb_speaker.setCurrentText(seg.speaker)
-            cb_speaker.currentTextChanged.connect(lambda txt, r=row: self._on_speaker_changed(r, txt))
-            self.table.setCellWidget(row, self.COL_SPEAKER, cb_speaker)
+            # 4: Speaker (Single Male Voice mode)
+            seg.speaker = "ប្រុស (Male)"
+            item_spk = QTableWidgetItem("👨 ប្រុស" if self.lang == "km" else "👨 Male")
+            item_spk.setFlags(item_spk.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            item_spk.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            item_spk.setForeground(QColor("#38bdf8"))
+            self.table.setItem(row, self.COL_SPEAKER, item_spk)
 
             # 5: Original Speech
             item_src = QTableWidgetItem(seg.text_src)
@@ -396,21 +379,15 @@ class SegmentTableWidget(QWidget):
             item_km.setForeground(QColor("#fef08a") if seg.text_km else QColor("#94a3b8"))
             self.table.setItem(row, self.COL_KM, item_km)
 
-            # 7: Voice (Quick 1-Click Toggle: 👨 Male / 👩 Female in active Target Language)
-            is_female = is_female_voice(seg.voice)
+            # 7: Voice (Locked to Single Male Voice of active Target Language)
+            t_lang = getattr(self.project.settings, "target_language", "km") if self.project else "km"
+            seg.voice = normalize_to_male_voice(seg.voice, t_lang)
             actor_name = get_voice_actor_name(seg.voice)
-            if self.lang == "km":
-                btn_lbl = f"👩 ស្រី ({actor_name})" if is_female else f"👨 ប្រុស ({actor_name})"
-            else:
-                btn_lbl = f"👩 Female ({actor_name})" if is_female else f"👨 Male ({actor_name})"
-            btn_voice_toggle = QPushButton(btn_lbl)
-            if is_female:
-                btn_voice_toggle.setStyleSheet("background-color: #831843; color: #f472b6; font-weight: bold; border-radius: 4px; padding: 4px 8px;")
-            else:
-                btn_voice_toggle.setStyleSheet("background-color: #0c4a6e; color: #38bdf8; font-weight: bold; border-radius: 4px; padding: 4px 8px;")
-            btn_voice_toggle.setToolTip("Click to toggle between Male / Female voice" if self.lang == "en" else "ចុចដើម្បីប្តូរសំឡេង ប្រុស / ស្រី ភ្លាមៗ")
-            btn_voice_toggle.clicked.connect(lambda checked, s=seg: self._toggle_seg_voice(s))
-            self.table.setCellWidget(row, self.COL_VOICE, btn_voice_toggle)
+            btn_lbl = f"👨 ប្រុស ({actor_name})" if self.lang == "km" else f"👨 Male ({actor_name})"
+            lbl_voice = QLabel(btn_lbl)
+            lbl_voice.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lbl_voice.setStyleSheet("background-color: #0c4a6e; color: #38bdf8; font-weight: bold; border-radius: 4px; padding: 4px 6px;")
+            self.table.setCellWidget(row, self.COL_VOICE, lbl_voice)
 
             # 8: TTS Duration
             item_dur = QTableWidgetItem(f"{seg.tts_duration:.2f}" if seg.tts_duration > 0 else "-")

@@ -178,9 +178,9 @@ class TestCoreModules(unittest.TestCase):
 
         ae.align_speech_and_subtitles(proj.segments)
 
-        # Verify speech timestamps match exact audio (locked to character slot at ~2.7s)
+        # Verify speech timestamps match exact audio (locked to character slot at ~2.56s)
         self.assertAlmostEqual(seg1.speech_start, 1.0, places=2)
-        self.assertAlmostEqual(seg1.speech_end, 2.7, places=1) # 1.0 + 1.692 = ~2.7s
+        self.assertAlmostEqual(seg1.speech_end, 2.56, places=1)
         self.assertAlmostEqual(seg2.speech_start, 3.0, places=1)
 
         # Verify SRT generation matches speech timestamps
