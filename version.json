@@ -1,9 +1,9 @@
 {
-  "version": "1.2.0",
+  "version": "1.2.1",
   "app_name": "AI Movie Translator & Auto Dubbing Studio",
   "release_date": "2026-11-18",
-  "download_url": "https://github.com/rongk2562/Dubber/releases/download/v1.2.0/AI_Movie_Dubbing_Studio.exe",
-  "changelog_km": "កំណែថ្មី v1.2.0 (Perfect Lip-Sync & Single Male Voice):\n- 🎯 កែសម្រួលម៉ាស៊ីនតម្រឹមម៉ោងនិយាយ (Word-Level Lip-Sync + 0ms Delay Silence Trimming) ឱ្យសំឡេងចេញត្រូវគ្នាបេះបិទតាមមាត់តួអង្គ ១០០%\n- 👨 កំណត់ឱ្យប្រើសំឡេងប្រុស ១ គត់ (Single Male Voice: Piseth) សម្រាប់គ្រប់វគ្គទាំងអស់ដោយស្វ័យប្រវត្តិ\n- 🌐 គាំទ្រការបកប្រែ និងបញ្ចូលសំឡេង AI ច្រើនភាសា (៩ ភាសា) រួមជាមួយប៊ូតុង សម្អាត (Clear)",
-  "changelog_en": "Release v1.2.0 (Perfect Lip-Sync & Single Male Voice):\n- 🎯 Precision Word-Level Lip-Sync & 2ms Silence Trimming so dubbed speech starts the exact instant the character's mouth opens\n- 👨 Unified Single Male Voice mode across all segments\n- 🌐 9-Language Translation & Neural TTS with 3-mode Clear button",
+  "download_url": "https://github.com/rongk2562/Dubber/releases/download/v1.2.1/AI_Movie_Dubbing_Studio.exe",
+  "changelog_km": "កំណែថ្មី v1.2.1:\n- ✨ ដកប្រអប់ ស្វែងរក (Search) ចេញ និងរៀបចំប្រអប់ប៊ូតុងទាំង ៨ ឱ្យស្មើគ្នាស្អាត ១០០%\n- 🎯 ម៉ាស៊ីនតម្រឹមម៉ោងនិយាយត្រូវតាមមាត់តួអង្គ (Exact Lip-Sync & 0ms Delay)\n- 👨 សំឡេងប្រុស ១ គត់ (Single Male Voice) និងគាំទ្រការបកប្រែ ៩ ភាសា",
+  "changelog_en": "Release v1.2.1:\n- ✨ Removed Search box and aligned all 8 toolbar buttons with equal width\n- 🎯 Exact Word-Level Lip-Sync & 0ms Silence Trimming\n- 👨 Single Male Voice mode & 9-Language Translation",
   "mandatory": false
 }

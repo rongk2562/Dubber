@@ -5,7 +5,7 @@
 ; =====================================================================
 
 #define MyAppName "AI Movie Dubbing Studio"
-#define MyAppVersion "1.2.0"
+#define MyAppVersion "1.2.1"
 #define MyAppPublisher "KhmerAIDubStudio"
 #define MyAppExeName "AI_Movie_Dubbing_Studio.exe"
 #define MyDistDir "d:\summray_mo\dist\AI_Movie_Dubbing_Studio"

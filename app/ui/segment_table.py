@@ -176,8 +176,7 @@ class SegmentTableWidget(QWidget):
         for spd_val in [0.80, 0.90, 1.00, 1.05, 1.10, 1.15, 1.20, 1.25, 1.30, 1.40, 1.50]:
             self.cb_batch_speed.addItem(f"⚡ {spd_val:.2f}x", spd_val)
         self.cb_batch_speed.setCurrentIndex(3) # Default 1.05x
-        self.cb_batch_speed.setFixedWidth(88)
-        top_bar.addWidget(self.cb_batch_speed, 0)
+        top_bar.addWidget(self.cb_batch_speed, 1)
 
         self.btn_batch_speed = QPushButton("⚡ " + ("ដាក់ល្បឿន" if self.lang == "km" else "Set Speed"))
         self.btn_batch_speed.setStyleSheet("""
@@ -198,35 +197,17 @@ class SegmentTableWidget(QWidget):
         self.btn_batch_speed.clicked.connect(self._apply_batch_speed)
         top_bar.addWidget(self.btn_batch_speed, 1)
 
-        # Search / filter
+        # Search / filter (Hidden per user preference)
         self.txt_filter = QLineEdit()
-        self.txt_filter.setPlaceholderText("🔍 ស្វែងរក...")
-        self.txt_filter.setMinimumWidth(110)
-        self.txt_filter.setStyleSheet("""
-            QLineEdit {
-                background-color: #111827;
-                color: #f9fafb;
-                border: 1px solid #475569;
-                border-radius: 6px;
-                padding: 4px 10px;
-                font-size: 12px;
-            }
-            QLineEdit:focus {
-                border: 1px solid #38bdf8;
-            }
-        """)
-        self.txt_filter.textChanged.connect(self._filter_table)
-        top_bar.addWidget(self.txt_filter, 1)
+        self.txt_filter.setVisible(False)
 
-        # Enforce uniform 34px height and equal expanding policy across all boxes
+        # Enforce uniform 34px height and equal expanding policy across all 8 active boxes
         for w in [
             self.btn_add, self.btn_split, self.btn_merge, self.btn_delete,
-            self.btn_clear, self.btn_auto_gender, self.btn_humanize,
-            self.btn_batch_speed, self.txt_filter
+            self.btn_clear, self.btn_humanize, self.cb_batch_speed, self.btn_batch_speed
         ]:
             w.setFixedHeight(34)
             w.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.cb_batch_speed.setFixedHeight(34)
 
         layout.addLayout(top_bar)
 

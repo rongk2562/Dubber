@@ -248,7 +248,7 @@ DEFAULT_DUCKING_FADE_MS = 250 # ms fade in / fade out for ducking
 
 # Application Version & Update Configuration
 APP_NAME = "AI Movie Translator & Auto Dubbing Studio"
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.2.1"
 APP_BUILD_DATE = "2026-11-18"
 DEFAULT_UPDATE_URL = "https://raw.githubusercontent.com/rongk2562/Dubber/main/version.json"
 LOCAL_UPDATE_URL = "http://localhost:5000/api/version"
