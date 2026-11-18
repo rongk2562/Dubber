@@ -261,6 +261,12 @@ class VideoPlayerWidget(QWidget):
         self.segment_end_time = end_sec
         self.player.play()
 
+    def get_current_time(self) -> float:
+        """Return current video playback position in seconds."""
+        if hasattr(self, "player") and self.player:
+            return max(0.0, self.player.position() / 1000.0)
+        return 0.0
+
     def _on_seek(self, position_ms: int):
         self.segment_end_time = None
         self.player.setPosition(position_ms)

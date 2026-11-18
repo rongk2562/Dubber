@@ -224,8 +224,8 @@ def get_voice_actor_name(voice_id: str) -> str:
 
 # Translation Providers
 TRANSLATION_PROVIDERS = [
-    ("google", "Google Translate (Free / Web)"),
-    ("gemini", "Google Gemini AI (API)"),
+    ("google", "Google Translate (Free / Web - លំនាំដើមចាស់ មិនបាច់ប្រើ Key)"),
+    ("gemini", "Google Gemini 1.5 Flash (AI Studio - ណែនាំសម្រាប់ភាពយន្ត)"),
     ("claude", "Anthropic Claude (API)"),
     ("openai", "OpenAI GPT-4o (API)"),
     ("offline", "Manual / Offline Mode"),
@@ -248,7 +248,7 @@ DEFAULT_DUCKING_FADE_MS = 250 # ms fade in / fade out for ducking
 
 # Application Version & Update Configuration
 APP_NAME = "AI Movie Translator & Auto Dubbing Studio"
-APP_VERSION = "1.2.1"
+APP_VERSION = "1.3.0"
 APP_BUILD_DATE = "2026-11-18"
 DEFAULT_UPDATE_URL = "https://raw.githubusercontent.com/rongk2562/Dubber/main/version.json"
 LOCAL_UPDATE_URL = "http://localhost:5000/api/version"
@@ -315,9 +315,14 @@ STRINGS = {
         "audio_mixing_title": "Audio Mixing & Ducking",
         "audio_mixing_tab": "🎛️ Audio",
         "original_volume": "Original Audio Volume",
+        "original_voice_volume": "Original Voice Volume",
+        "background_volume": "Background (Music/SFX) Volume",
+        "ai_voice_volume": "AI Voice Volume",
         "dubbed_volume": "Dubbed Voice Volume",
         "ducking_level": "Ducking Reduction",
         "mute_original": "Mute Original Audio (Pure Dubbing Only)",
+        "keep_background": "Keep Background (Music & Sound Effects)",
+        "mask_subtitles": "Mask Original Chinese Subtitles",
         "burn_subtitles": "Burn-in Subtitles into Exported Video",
         "btn_detect_genders": "🎭 Auto-Assign Character Voices",
         "ai_voice_speed": "AI Voice Speed",
@@ -422,9 +427,14 @@ STRINGS = {
         "audio_mixing_title": "ការលាយសំឡេង និងបញ្ចុះសំឡេងដើម (Audio Mixing & Ducking)",
         "audio_mixing_tab": "🎛️ សំឡេង (Audio)",
         "original_volume": "កម្រិតសំឡេងដើម / ផ្ទៃខាងក្រោយ",
+        "original_voice_volume": "កម្រិតសំឡេងមនុស្សដើម (Original Voice)",
+        "background_volume": "កម្រិតតន្ត្រីផ្ទៃក្រោយ (Music/SFX)",
+        "ai_voice_volume": "កម្រិតសំឡេងបញ្ចូល AI ខ្មែរ (AI Voice)",
         "dubbed_volume": "កម្រិតសំឡេងបញ្ចូល AI ខ្មែរ",
         "ducking_level": "កម្រិតបញ្ចុះសំឡេងដើមពេលមានការនិយាយ (Ducking)",
         "mute_original": "🔇 បិទសំឡេងដើមទាំងស្រុង (លឺតែសំឡេង AI ខ្មែរ)",
+        "keep_background": "រក្សាតន្ត្រីផ្ទៃក្រោយ (Music & SFX)",
+        "mask_subtitles": "បិទបាំងអក្សរចិនដើម (Subtitle Mask)",
         "burn_subtitles": "ដុតអក្សររត់ក្រោម (Subtitle) ជាប់លើវីដេអូនាំចេញ",
         "btn_detect_genders": "🎭 ស្មានសំឡេងតួអង្គ (ប្រុស/ស្រី) ស្វ័យប្រវត្តិ",
         "ai_voice_speed": "ល្បឿនសំឡេង AI និយាយ (Voice Speed)",

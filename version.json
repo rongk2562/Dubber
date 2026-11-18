@@ -1,9 +1,9 @@
 {
-  "version": "1.2.1",
+  "version": "1.3.0",
   "app_name": "AI Movie Translator & Auto Dubbing Studio",
   "release_date": "2026-11-18",
-  "download_url": "https://github.com/rongk2562/Dubber/releases/download/v1.2.1/AI_Movie_Dubbing_Studio.exe",
-  "changelog_km": "កំណែថ្មី v1.2.1:\n- ✨ ដកប្រអប់ ស្វែងរក (Search) ចេញ និងរៀបចំប្រអប់ប៊ូតុងទាំង ៨ ឱ្យស្មើគ្នាស្អាត ១០០%\n- 🎯 ម៉ាស៊ីនតម្រឹមម៉ោងនិយាយត្រូវតាមមាត់តួអង្គ (Exact Lip-Sync & 0ms Delay)\n- 👨 សំឡេងប្រុស ១ គត់ (Single Male Voice) និងគាំទ្រការបកប្រែ ៩ ភាសា",
-  "changelog_en": "Release v1.2.1:\n- ✨ Removed Search box and aligned all 8 toolbar buttons with equal width\n- 🎯 Exact Word-Level Lip-Sync & 0ms Silence Trimming\n- 👨 Single Male Voice mode & 9-Language Translation",
+  "download_url": "https://github.com/rongk2562/Dubber/releases/download/v1.3.0/AI_Movie_Dubbing_Studio.exe",
+  "changelog_km": "កំណែថ្មី v1.3.0:\n- 🔲 ផ្ទាំងសារ៉េបិទបាំងអក្សរចិនដើម (Subtitle Mask Band) អាចទាញ Mouse 2D, សារ៉េទីតាំង X/Y, កម្ពស់, ទទឹង និងកម្រិតងងឹត\n- 🎯 ចាក់សោតម្រឹមអក្សរខ្មែរចំកណ្ដាលប្រអប់ស្វ័យប្រវត្តិ (Auto-lock in Center) 1:1 Pixel-exact ជាមួយ FFmpeg PlayRes\n- 🔤 កែប្រែឈ្មោះតួអង្គចិន និងឡាតាំងទៅជាអក្សរខ្មែរជាប់លាប់ (Transliteration: Gang Hong -> គាំងហុង, Baoshou -> ប៉ោសូវ, Su Bao -> ស៊ូប៉ាវ...)\n- 🔇 បិទសំឡេងដើមទាំងស្រុង (Digital Silence < -80 dB) និងបំបែក Stem សំឡេងតួដើម, ភ្លេង BG និងសំឡេង AI ដាច់ពីគ្នា\n- 🤖 គាំទ្រការបកប្រែតាមរយៈ Gemini 1.5 Flash ជាមួយ Custom API Key\n- ⏱️ Speech Rate Budget & Text Condenser សម្រាប់ល្បឿននិយាយភាសាខ្មែរធម្មជាតិ (5-6 ព្យាង្គ/វិនាទី)",
+  "changelog_en": "Release v1.3.0:\n- 🔲 Interactive Subtitle Mask Band Dialog with 2D Drag, X/Y positioning, width, height & opacity\n- 🎯 Subtitle auto-lock inside mask band with 1:1 PlayResX/PlayResY exact pixel matching\n- 🔤 Consistent Khmer transliteration engine for character names (Gang Hong -> គាំងហុង, Baoshou -> ប៉ោសូវ, Su Bao -> ស៊ូប៉ាវ)\n- 🔇 True digital silence (< -80 dB) when original voice/background is muted, with 3 independent stems\n- 🤖 Gemini 1.5 Flash translation engine support with customizable API Key\n- ⏱️ Speech-rate budget & condensation for natural Khmer speaking speed (5-6 syl/s)",
   "mandatory": false
 }

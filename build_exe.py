@@ -155,6 +155,7 @@ def build():
         "--collect-all", "ctranslate2",
         "--collect-all", "tokenizers",
         "--collect-all", "huggingface_hub",
+        "--collect-all", "google.generativeai",
         "--hidden-import", "PySide6.QtMultimedia",
         "--hidden-import", "PySide6.QtMultimediaWidgets",
         "--hidden-import", "PySide6.QtNetwork",

@@ -35,6 +35,11 @@ class Segment:
     actual_start: float = 0.0    # Exact synchronized speech start timestamp in seconds
     actual_end: float = 0.0      # Exact synchronized speech end timestamp in seconds
 
+    # ASR Repair & Homophone Correction tracking
+    zh_fixed: str = ""           # Repaired Chinese text (homophone fixed)
+    asr_confidence: float = 1.0  # ASR confidence (0.0 to 1.0)
+    asr_changed: bool = False    # True if homophone was repaired
+
     @property
     def speech_start(self) -> float:
         """Exact start timestamp of the spoken voice (seconds). Defaults to start."""
@@ -118,13 +123,26 @@ class ProjectSettings:
     gemini_api_key: str = ""
     claude_api_key: str = ""
     openai_api_key: str = ""
-    original_volume: float = 0.3    # Volume factor 0.0 to 1.5
-    dubbed_volume: float = 1.0      # Volume factor 0.0 to 2.0
-    mute_original: bool = False     # Completely mute original audio (pure Khmer dubbing only)
+    original_volume: float = 0.3    # Legacy volume factor 0.0 to 1.5
+    original_voice_volume: float = 0.0 # Dedicated Original Voice (Vocals) volume (0.0 to 1.0)
+    background_volume: float = 0.30 # Dedicated Background (Music/SFX) volume (0.0 to 1.0)
+    keep_background: bool = True    # Keep background accompaniment while original dialogue is muted
+    mute_original: bool = False     # Completely mute original audio (Original Voice=0 and Background=0)
+    dubbed_volume: float = 1.0      # AI Voice volume factor 0.0 to 2.0
     ducking_db: float = -14.0       # Ducking reduction in dB during speech
     ducking_fade_ms: int = 250      # Ducking attack/release fade ms
     burn_subtitles: bool = True     # Burn Khmer subtitles onto video export
-    subtitle_font: str = "Kantumruy Pro"
+    mask_subtitles: bool = True     # Cover original Chinese subtitles with clean masking band
+    mask_y_percent: float = 83.0    # Mask vertical position from top (percentage 50.0 to 98.0%)
+    mask_height_percent: float = 12.0 # Mask band height (percentage of video height 4.0 to 30.0%)
+    mask_width_percent: float = 100.0 # Mask band width (percentage of video width 40.0 to 100.0%)
+    mask_x_percent: float = 0.0     # Mask horizontal position (percentage 0.0 to 50.0%)
+    mask_opacity: float = 0.95      # Mask band opacity (0.2 to 1.0, 1.0 = solid opaque black)
+    mask_color: str = "black"       # "black", "dark_gray", "navy"
+    subtitle_font: str = "Noto Sans Khmer" # Default Noto Sans Khmer
+    subtitle_font_size: int = 20    # Subtitle font size in px (12 to 36)
+    subtitle_margin_v: int = 25     # Subtitle bottom margin in px (5 to 100)
+    translation_style: str = "natural" # "natural", "literal", "dramatic", "comedy"
     ui_language: str = "km"         # "km" or "en"
     logo_enabled: bool = False      # Overlay custom logo / watermark
     logo_path: str = ""             # Image path (png, jpg, webp)

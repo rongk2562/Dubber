@@ -99,101 +99,78 @@ class SyncEngine:
                 # Case B: Duration exceeds slot -> Apply 4-Stage Cascade in Order
                 status = "UNRESOLVED"
                 
-                # --- STAGE 1: Increase TTS speed (max ~1.25x) ---
+                # --- STAGE 1: Increase speech speed locally (max ~1.25x) without redundant network re-synthesis ---
                 needed_speed = round(orig_dur / slot, 3)
                 if needed_speed <= MAX_TTS_SPEED:
-                    if seg.text_km or seg.text_src:
-                        self.tts_engine.generate_segment_tts(seg, speed_factor=needed_speed)
-                    else:
-                        seg.speed = needed_speed
-                        seg.tts_duration = round(orig_dur / needed_speed, 3)
+                    if seg.tts_file and os.path.exists(seg.tts_file):
+                        try:
+                            stretched_file = self.audio_engine.time_stretch_atempo(
+                                seg.tts_file, speed_factor=needed_speed, output_wav=seg.tts_file
+                            )
+                            seg.tts_file = stretched_file
+                        except Exception:
+                            pass
+                    seg.speed = needed_speed
+                    seg.tts_duration = round(orig_dur / needed_speed, 3)
+                    seg.actual_start = round(seg.start, 3)
+                    seg.actual_end = round(seg.start + seg.tts_duration, 3)
 
                     if seg.tts_duration <= slot + 0.05:
                         status = "SPEED_ADJUSTED"
                         final_dur = seg.tts_duration
-                        notes = f"Increased TTS speed to {needed_speed:.2f}x to fit {slot:.2f}s slot."
+                        notes = f"Increased voice speed to {needed_speed:.2f}x to fit {slot:.2f}s slot."
                         report.speed_adjusted_count += 1
                         
-                # --- STAGE 2: Ask the LLM to shorten the translated text ---
+                # --- STAGE 2: Shorten translated text if significantly condensing ---
                 if status == "UNRESOLVED":
-                    # Try shortening Khmer text
                     old_text = seg.text_km
                     shortened_text = self.translation_engine.shorten_khmer_text(
                         seg.text_src, seg.text_km, project.glossary
                     )
-                    
-                    if shortened_text and shortened_text != old_text:
+
+                    if shortened_text and shortened_text != old_text and len(shortened_text) < len(old_text) * 0.85:
                         seg.text_km = shortened_text
                         self.tts_engine.generate_segment_tts(seg, speed_factor=1.0)
-                        
-                        if seg.tts_duration <= slot:
+
+                        if seg.tts_duration <= slot + 0.05:
                             status = "SHORTENED"
                             final_dur = seg.tts_duration
-                            notes = "Shortened Khmer phrasing via LLM."
+                            notes = "Shortened Khmer phrasing."
                             report.shortened_count += 1
-                        else:
-                            # Try slight speedup on shortened text
-                            sub_speed = min(MAX_TTS_SPEED, round(seg.tts_duration / slot, 3))
-                            self.tts_engine.generate_segment_tts(seg, speed_factor=sub_speed)
-                            if seg.tts_duration <= slot + 0.05:
-                                status = "SHORTENED"
-                                final_dur = seg.tts_duration
-                                notes = f"Shortened text and adjusted speed to {sub_speed:.2f}x."
-                                report.shortened_count += 1
 
-                # --- STAGE 3: Borrow empty gap time from the next segment ---
+                # --- STAGE 3 & 4: Time-stretch with FFmpeg atempo to lock strictly into original [start, end] slot ---
                 if status == "UNRESOLVED":
-                    # Calculate available gap to next segment
-                    next_start = segments[i + 1].start if (i + 1 < len(segments)) else (seg.end + 10.0)
-                    available_gap = max(0.0, next_start - seg.end)
-                    
-                    # Reserve 0.1s margin to ensure no overlap
-                    usable_gap = max(0.0, available_gap - 0.10)
-                    current_effective_dur = seg.tts_duration
-                    deficit = current_effective_dur - slot
-
-                    if deficit <= usable_gap:
-                        borrowed_gap = round(deficit + 0.05, 3)
-                        seg.borrowed_gap = borrowed_gap
-                        status = "GAP_BORROWED"
-                        final_dur = current_effective_dur
-                        notes = f"Borrowed {borrowed_gap:.2f}s empty gap from next segment."
-                        report.gap_borrowed_count += 1
-                    else:
-                        # Borrow whatever gap is available and proceed to Stage 4
-                        if usable_gap > 0.2:
-                            borrowed_gap = round(usable_gap, 3)
-                            seg.borrowed_gap = borrowed_gap
-
-                # --- STAGE 4: Time-stretch with FFmpeg atempo (max 1.3x) ---
-                if status == "UNRESOLVED":
-                    allowed_window = slot + borrowed_gap
+                    seg.borrowed_gap = 0.0
+                    borrowed_gap = 0.0
+                    allowed_window = max(0.35, slot)
                     stretch_ratio = round(seg.tts_duration / allowed_window, 3)
-                    
-                    if stretch_ratio <= MAX_ATEMPO_SPEED:
+
+                    if stretch_ratio <= 1.85:
                         if seg.tts_file and os.path.exists(seg.tts_file):
                             stretched_file = self.audio_engine.time_stretch_atempo(
-                                seg.tts_file, speed_factor=stretch_ratio
+                                seg.tts_file, speed_factor=stretch_ratio, output_wav=seg.tts_file
                             )
                             seg.tts_file = stretched_file
-                        # Update new duration
                         new_dur = round(seg.tts_duration / stretch_ratio, 3)
                         seg.tts_duration = new_dur
                         seg.speed = stretch_ratio
+                        seg.actual_start = round(seg.start, 3)
+                        seg.actual_end = round(seg.start + new_dur, 3)
                         status = "TIME_STRETCHED"
                         final_dur = new_dur
-                        notes = f"Time-stretched with FFmpeg atempo ({stretch_ratio:.2f}x)."
+                        notes = f"Time-stretched with FFmpeg atempo ({stretch_ratio:.2f}x) to match original video slot ({slot:.2f}s)."
                         report.time_stretched_count += 1
                     else:
-                        # OVERFLOW: Even with max speed (1.3x) and gap borrowing, it still exceeds!
-                        max_stretch = MAX_ATEMPO_SPEED
+                        max_stretch = 1.85
                         if seg.tts_file and os.path.exists(seg.tts_file):
                             stretched_file = self.audio_engine.time_stretch_atempo(
-                                seg.tts_file, speed_factor=max_stretch
+                                seg.tts_file, speed_factor=max_stretch, output_wav=seg.tts_file
                             )
                             seg.tts_file = stretched_file
                         seg.tts_duration = round(seg.tts_duration / max_stretch, 3)
                         seg.speed = max_stretch
+                        seg.actual_start = round(seg.start, 3)
+                        seg.actual_end = round(seg.start + seg.tts_duration, 3)
                         status = "OVERFLOW"
                         final_dur = seg.tts_duration
                         overflow_amt = round(final_dur - allowed_window, 2)

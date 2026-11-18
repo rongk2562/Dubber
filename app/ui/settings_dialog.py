@@ -7,7 +7,8 @@ from PySide6.QtWidgets import (
     QComboBox, QCheckBox, QSlider, QPushButton, QGroupBox, QSpinBox,
     QDoubleSpinBox
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QUrl
+from PySide6.QtGui import QDesktopServices
 from app.models import ProjectSettings
 from app.config import WHISPER_MODELS, TRANSLATION_PROVIDERS, KHMER_VOICES, TARGET_LANGUAGES
 
@@ -71,8 +72,14 @@ class SettingsDialog(QDialog):
         row_gemini.addWidget(QLabel("Gemini API Key:"))
         self.txt_gemini = QLineEdit(self.settings.gemini_api_key)
         self.txt_gemini.setEchoMode(QLineEdit.EchoMode.Password)
-        self.txt_gemini.setPlaceholderText("AIzaSy...")
+        self.txt_gemini.setPlaceholderText("AQ... ឬ AIzaSy... (ឥតគិតថ្លៃ / Free)")
         row_gemini.addWidget(self.txt_gemini)
+
+        btn_get_gemini = QPushButton("🔗 យក Key ឥតគិតថ្លៃ" if self.lang == "km" else "🔗 Get Free Key")
+        btn_get_gemini.setStyleSheet("background-color: #047857; color: white; font-size: 11px; padding: 3px 8px; border-radius: 4px; font-weight: bold;")
+        btn_get_gemini.setToolTip("បើកគេហទំព័រ Google AI Studio ដើម្បីយក Gemini API Key ឥតគិតថ្លៃ")
+        btn_get_gemini.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("https://aistudio.google.com/app/apikey")))
+        row_gemini.addWidget(btn_get_gemini)
         tr_layout.addLayout(row_gemini)
 
         row_claude = QHBoxLayout()

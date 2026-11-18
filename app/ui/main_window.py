@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
     QPushButton, QLabel, QFileDialog, QMessageBox, QProgressBar,
     QMenuBar, QMenu, QToolBar, QStatusBar, QGroupBox, QSlider,
-    QCheckBox, QDialog, QTabWidget, QComboBox
+    QCheckBox, QDialog, QTabWidget, QComboBox, QLineEdit
 )
 from PySide6.QtCore import Qt, QThread, Signal, QTimer
 from PySide6.QtGui import QIcon, QAction, QFont
@@ -248,6 +248,10 @@ class MainWindow(QMainWindow):
         menu_tools.addSeparator()
         menu_tools.addAction("👁️ " + s.get("btn_preview_dubbed", "មើលលទ្ធផលសាកល្បង (Preview)"), self._run_preview_result, "Ctrl+P")
         menu_tools.addSeparator()
+        menu_tools.addAction(
+            "⚙️ សារ៉េទីតាំងបិទបាំងអក្សរចិន (Subtitle Mask)..." if self.lang == "km" else "⚙️ Subtitle Mask & Position...",
+            self._open_subtitle_mask_dialog
+        )
         menu_tools.addAction(s["batch_queue"], self._open_batch_dialog)
         menu_tools.addAction(s["settings"], self._open_settings)
 
@@ -300,6 +304,28 @@ class MainWindow(QMainWindow):
         self.cb_target_lang.currentIndexChanged.connect(self._on_target_lang_changed)
         toolbar.addWidget(self.cb_target_lang)
 
+        # Translation Engine Selector (Google Translate vs Gemini 1.5 Flash)
+        self.cb_trans_provider = QComboBox()
+        self.cb_trans_provider.setMinimumWidth(165)
+        self.cb_trans_provider.setToolTip("ជ្រើសរើស Engine បកប្រែ៖ Google Translate (ចាស់/ឥតគិតថ្លៃ) ឬ Gemini 1.5 Flash (AI ភាពយន្ត)")
+        self.cb_trans_provider.setStyleSheet("""
+            QComboBox {
+                background-color: #0f172a;
+                color: #c084fc;
+                border: 1px solid #7e22ce;
+                border-radius: 6px;
+                padding: 5px 10px;
+                font-weight: bold;
+                font-size: 11px;
+            }
+            QComboBox:hover {
+                border-color: #d8b4fe;
+            }
+        """)
+        self._populate_trans_providers()
+        self.cb_trans_provider.currentIndexChanged.connect(self._on_trans_provider_changed)
+        toolbar.addWidget(self.cb_trans_provider)
+
         # Step 2: Translate
         self.act_translate = toolbar.addAction("🌐 ២. បកប្រែ" if self.lang == "km" else "🌐 2. Translate", self._run_translation)
         self.act_translate.setToolTip(s["btn_translate_all"])
@@ -346,15 +372,16 @@ class MainWindow(QMainWindow):
         panel = QWidget()
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(10, 8, 10, 8)
-        layout.setSpacing(8)
+        layout.setSpacing(6)
 
-        # 1. Original Volume
+        # 1. Dedicated Original Voice (Vocals) Volume
         vbox_orig = QVBoxLayout()
         vbox_orig.setSpacing(2)
         row_orig_hdr = QHBoxLayout()
-        self.lbl_orig_title = QLabel(s.get("original_volume", "Original Audio Volume"))
-        self.lbl_orig_title.setStyleSheet("font-weight: 600; color: #cbd5e1; font-size: 12px;")
-        self.lbl_orig_val = QLabel(f"{int(self.project.settings.original_volume * 100)}%")
+        self.lbl_orig_title = QLabel(s.get("original_voice_volume", "Original Voice Volume"))
+        self.lbl_orig_title.setStyleSheet("font-weight: 600; color: #cbd5e1; font-size: 11px;")
+        orig_val_pct = int(self.project.settings.original_voice_volume * 100)
+        self.lbl_orig_val = QLabel(f"{orig_val_pct}%" if orig_val_pct > 0 and not self.project.settings.mute_original else "0% (OFF)")
         self.lbl_orig_val.setStyleSheet("background: #1e293b; color: #38bdf8; font-weight: bold; padding: 1px 6px; border-radius: 3px; font-size: 11px;")
         row_orig_hdr.addWidget(self.lbl_orig_title)
         row_orig_hdr.addStretch()
@@ -363,17 +390,41 @@ class MainWindow(QMainWindow):
 
         self.slider_orig_vol = QSlider(Qt.Orientation.Horizontal)
         self.slider_orig_vol.setRange(0, 150)
-        self.slider_orig_vol.setValue(int(self.project.settings.original_volume * 100))
+        self.slider_orig_vol.setValue(0 if self.project.settings.mute_original else orig_val_pct)
+        self.slider_orig_vol.setEnabled(not self.project.settings.mute_original)
         self.slider_orig_vol.valueChanged.connect(self._on_orig_vol_changed)
         vbox_orig.addWidget(self.slider_orig_vol)
         layout.addLayout(vbox_orig)
 
-        # 2. Dubbed Voice Volume
+        # 2. Dedicated Background (Music & Sound Effects) Volume
+        vbox_bg = QVBoxLayout()
+        vbox_bg.setSpacing(2)
+        row_bg_hdr = QHBoxLayout()
+        self.lbl_bg_title = QLabel(s.get("background_volume", "Background (Music/SFX) Volume"))
+        self.lbl_bg_title.setStyleSheet("font-weight: 600; color: #cbd5e1; font-size: 11px;")
+        bg_val_pct = int(self.project.settings.background_volume * 100)
+        bg_active = (not self.project.settings.mute_original or self.project.settings.keep_background) and bg_val_pct > 0
+        self.lbl_bg_val = QLabel(f"{bg_val_pct}%" if bg_active else "0% (OFF)")
+        self.lbl_bg_val.setStyleSheet("background: #1e293b; color: #f59e0b; font-weight: bold; padding: 1px 6px; border-radius: 3px; font-size: 11px;")
+        row_bg_hdr.addWidget(self.lbl_bg_title)
+        row_bg_hdr.addStretch()
+        row_bg_hdr.addWidget(self.lbl_bg_val)
+        vbox_bg.addLayout(row_bg_hdr)
+
+        self.slider_bg_vol = QSlider(Qt.Orientation.Horizontal)
+        self.slider_bg_vol.setRange(0, 150)
+        self.slider_bg_vol.setValue(bg_val_pct if bg_active else 0)
+        self.slider_bg_vol.setEnabled(bg_active or self.project.settings.keep_background)
+        self.slider_bg_vol.valueChanged.connect(self._on_bg_vol_changed)
+        vbox_bg.addWidget(self.slider_bg_vol)
+        layout.addLayout(vbox_bg)
+
+        # 3. AI Dubbed Voice Volume
         vbox_dub = QVBoxLayout()
         vbox_dub.setSpacing(2)
         row_dub_hdr = QHBoxLayout()
-        self.lbl_dub_title = QLabel(s.get("dubbed_volume", "Dubbed Voice Volume"))
-        self.lbl_dub_title.setStyleSheet("font-weight: 600; color: #cbd5e1; font-size: 12px;")
+        self.lbl_dub_title = QLabel(s.get("ai_voice_volume", "AI Voice Volume"))
+        self.lbl_dub_title.setStyleSheet("font-weight: 600; color: #cbd5e1; font-size: 11px;")
         self.lbl_dub_val = QLabel(f"{int(self.project.settings.dubbed_volume * 100)}%")
         self.lbl_dub_val.setStyleSheet("background: #1e293b; color: #a855f7; font-weight: bold; padding: 1px 6px; border-radius: 3px; font-size: 11px;")
         row_dub_hdr.addWidget(self.lbl_dub_title)
@@ -388,39 +439,19 @@ class MainWindow(QMainWindow):
         vbox_dub.addWidget(self.slider_dub_vol)
         layout.addLayout(vbox_dub)
 
-        # 3. Ducking Reduction
-        vbox_duck = QVBoxLayout()
-        vbox_duck.setSpacing(2)
-        row_duck_hdr = QHBoxLayout()
-        self.lbl_duck_title = QLabel(s.get("ducking_level", "Ducking Reduction"))
-        self.lbl_duck_title.setStyleSheet("font-weight: 600; color: #cbd5e1; font-size: 12px;")
-        self.lbl_duck_val = QLabel(f"{self.project.settings.ducking_db:.0f} dB")
-        self.lbl_duck_val.setStyleSheet("background: #1e293b; color: #f59e0b; font-weight: bold; padding: 1px 6px; border-radius: 3px; font-size: 11px;")
-        row_duck_hdr.addWidget(self.lbl_duck_title)
-        row_duck_hdr.addStretch()
-        row_duck_hdr.addWidget(self.lbl_duck_val)
-        vbox_duck.addLayout(row_duck_hdr)
-
-        self.slider_duck = QSlider(Qt.Orientation.Horizontal)
-        self.slider_duck.setRange(-35, -5)
-        self.slider_duck.setValue(int(self.project.settings.ducking_db))
-        self.slider_duck.valueChanged.connect(self._on_duck_changed)
-        vbox_duck.addWidget(self.slider_duck)
-        layout.addLayout(vbox_duck)
-
         # 4. AI Voice Speed (ល្បឿនសំឡេង AI និយាយ)
         vbox_spd = QVBoxLayout()
         vbox_spd.setSpacing(2)
         row_spd_hdr = QHBoxLayout()
         self.lbl_spd_title = QLabel(s.get("ai_voice_speed", "AI Voice Speed"))
-        self.lbl_spd_title.setStyleSheet("font-weight: 600; color: #cbd5e1; font-size: 12px;")
+        self.lbl_spd_title.setStyleSheet("font-weight: 600; color: #cbd5e1; font-size: 11px;")
         
         init_spd = getattr(self.project.settings, "ai_voice_speed", 1.05)
         self.lbl_spd_val = QLabel(f"{init_spd:.2f}x")
         self.lbl_spd_val.setStyleSheet("background: #064e3b; color: #34d399; font-weight: bold; padding: 1px 6px; border-radius: 3px; font-size: 11px;")
         
         self.btn_apply_spd_all = QPushButton(s.get("btn_apply_speed_all", "⚡ អនុវត្តគ្រប់វគ្គ"))
-        self.btn_apply_spd_all.setStyleSheet("background-color: #047857; color: white; font-size: 11px; padding: 2px 7px; border-radius: 3px; font-weight: bold;")
+        self.btn_apply_spd_all.setStyleSheet("background-color: #047857; color: white; font-size: 10px; padding: 2px 6px; border-radius: 3px; font-weight: bold;")
         self.btn_apply_spd_all.setToolTip("កំណត់ល្បឿននេះទៅគ្រប់វគ្គទាំងអស់ (Apply this speed to all segments)")
         self.btn_apply_spd_all.clicked.connect(self._apply_global_speed_to_all)
         
@@ -440,7 +471,7 @@ class MainWindow(QMainWindow):
         # Quick preset buttons for instant 1-click selection
         for spd_preset in [0.90, 1.00, 1.05, 1.15, 1.25]:
             btn_p = QPushButton(f"{spd_preset:.2f}x" if spd_preset != 1.0 else "1.0x")
-            btn_p.setFixedWidth(38)
+            btn_p.setFixedWidth(36)
             btn_p.setStyleSheet("background: #1e293b; color: #94a3b8; font-size: 10px; padding: 2px; border-radius: 3px;")
             btn_p.clicked.connect(lambda checked, val=spd_preset: self.slider_ai_speed.setValue(int(val * 100)))
             row_spd_controls.addWidget(btn_p)
@@ -448,23 +479,51 @@ class MainWindow(QMainWindow):
         vbox_spd.addLayout(row_spd_controls)
         layout.addLayout(vbox_spd)
 
-        # 5. Checkboxes in clean row
-        row_checks = QHBoxLayout()
-        row_checks.setSpacing(10)
-        self.chk_mute_orig = QCheckBox(s["mute_original"])
+        # 5. Checkboxes Row 1: Mute & Keep Background Controls & Single Status Badge
+        row_checks_1 = QHBoxLayout()
+        row_checks_1.setSpacing(8)
+        self.chk_mute_orig = QCheckBox(s.get("mute_original", "Mute Original Entirely"))
         self.chk_mute_orig.setStyleSheet("color: #f87171; font-weight: bold; font-size: 11px;")
         self.chk_mute_orig.setChecked(self.project.settings.mute_original)
         self.chk_mute_orig.toggled.connect(self._on_mute_original_toggled)
-        row_checks.addWidget(self.chk_mute_orig)
+        row_checks_1.addWidget(self.chk_mute_orig)
 
-        self.chk_burn_sub = QCheckBox(s["burn_subtitles"])
+        self.chk_keep_bg = QCheckBox(s.get("keep_background", "Keep Background"))
+        self.chk_keep_bg.setStyleSheet("color: #38bdf8; font-size: 11px;")
+        self.chk_keep_bg.setChecked(self.project.settings.keep_background)
+        self.chk_keep_bg.toggled.connect(self._on_keep_bg_toggled)
+        row_checks_1.addWidget(self.chk_keep_bg)
+
+        self.lbl_mute_summary = QLabel()
+        self.lbl_mute_summary.setStyleSheet("background: #0f172a; color: #94a3b8; font-weight: bold; padding: 1px 6px; border-radius: 3px; font-size: 10px;")
+        row_checks_1.addStretch()
+        row_checks_1.addWidget(self.lbl_mute_summary)
+        layout.addLayout(row_checks_1)
+
+        # 6. Checkboxes Row 2: Subtitle Burn & Chinese Subtitle Masking
+        row_checks_2 = QHBoxLayout()
+        row_checks_2.setSpacing(8)
+        self.chk_burn_sub = QCheckBox(s.get("burn_subtitles", "Burn Subtitles"))
         self.chk_burn_sub.setStyleSheet("color: #94a3b8; font-size: 11px;")
         self.chk_burn_sub.setChecked(self.project.settings.burn_subtitles)
         self.chk_burn_sub.toggled.connect(lambda val: setattr(self.project.settings, "burn_subtitles", val))
-        row_checks.addWidget(self.chk_burn_sub)
-        row_checks.addStretch()
-        layout.addLayout(row_checks)
+        row_checks_2.addWidget(self.chk_burn_sub)
 
+        self.chk_mask_sub = QCheckBox(s.get("mask_subtitles", "Mask Original Subtitles"))
+        self.chk_mask_sub.setStyleSheet("color: #c084fc; font-size: 11px;")
+        self.chk_mask_sub.setChecked(getattr(self.project.settings, "mask_subtitles", True))
+        self.chk_mask_sub.toggled.connect(lambda val: setattr(self.project.settings, "mask_subtitles", val))
+        row_checks_2.addWidget(self.chk_mask_sub)
+
+        self.btn_mask_settings = QPushButton("⚙️ សារ៉េទីតាំង..." if self.lang == "km" else "⚙️ Position...")
+        self.btn_mask_settings.setStyleSheet("background-color: #1e293b; color: #38bdf8; font-size: 11px; padding: 2px 8px; border-radius: 4px; border: 1px solid #0284c7; font-weight: bold;")
+        self.btn_mask_settings.setToolTip("បើកផ្ទាំងសារ៉េទីតាំង កម្ពស់ និងកម្រិតបិទបាំងអក្សរចិនដើម (Adjust Subtitle Mask & Positioning)")
+        self.btn_mask_settings.clicked.connect(self._open_subtitle_mask_dialog)
+        row_checks_2.addWidget(self.btn_mask_settings)
+        row_checks_2.addStretch()
+        layout.addLayout(row_checks_2)
+
+        self._update_mute_status_display()
         layout.addStretch()
         return panel
 
@@ -683,22 +742,87 @@ class MainWindow(QMainWindow):
         lang_lbl = TARGET_LANG_MAP.get(new_lang, {}).get("label", new_lang)
         self.status_bar.showMessage(f"បានប្ដូរភាសាបកប្រែ និងសំឡេង AI ទៅជា៖ {lang_lbl}", 4500)
 
+    def _populate_trans_providers(self):
+        if not hasattr(self, "cb_trans_provider"):
+            return
+        self.cb_trans_provider.blockSignals(True)
+        self.cb_trans_provider.clear()
+        if self.lang == "km":
+            self.cb_trans_provider.addItem("🌐 Google (ចាស់)", "google")
+            self.cb_trans_provider.addItem("✨ Gemini 1.5 Flash", "gemini")
+        else:
+            self.cb_trans_provider.addItem("🌐 Google (Classic)", "google")
+            self.cb_trans_provider.addItem("✨ Gemini 1.5 Flash", "gemini")
+
+        cur_prov = getattr(self.project.settings, "translation_provider", "google") or "google"
+        idx = self.cb_trans_provider.findData(cur_prov)
+        if idx >= 0:
+            self.cb_trans_provider.setCurrentIndex(idx)
+        else:
+            self.cb_trans_provider.setCurrentIndex(0)
+        self.cb_trans_provider.blockSignals(False)
+
+    def _on_trans_provider_changed(self):
+        if not hasattr(self, "cb_trans_provider"):
+            return
+        prov = self.cb_trans_provider.currentData() or "google"
+        if prov == "gemini":
+            if not self.project.settings.gemini_api_key:
+                from PySide6.QtWidgets import QInputDialog
+                key, ok = QInputDialog.getText(
+                    self,
+                    "Gemini API Key",
+                    "សូមបញ្ចូល Google Gemini API Key (ឥតគិតថ្លៃពី https://aistudio.google.com/):" if self.lang == "km" else "Enter Google Gemini API Key (Free from https://aistudio.google.com/):",
+                    QLineEdit.EchoMode.Normal
+                )
+                if ok and key.strip():
+                    self.project.settings.gemini_api_key = key.strip()
+                    self.project.settings.translation_provider = "gemini"
+                    self.translation_engine.settings = self.project.settings
+                    self.status_bar.showMessage("បានរក្សាទុក Gemini API Key និងបើកប្រើ Gemini 1.5 Flash!", 4500)
+                else:
+                    # Revert to google
+                    self.cb_trans_provider.blockSignals(True)
+                    idx = self.cb_trans_provider.findData("google")
+                    if idx >= 0:
+                        self.cb_trans_provider.setCurrentIndex(idx)
+                    self.cb_trans_provider.blockSignals(False)
+                    self.project.settings.translation_provider = "google"
+                    self.translation_engine.settings = self.project.settings
+                    return
+            else:
+                self.project.settings.translation_provider = "gemini"
+                self.translation_engine.settings = self.project.settings
+                self.status_bar.showMessage("បានជ្រើសរើស Engine: Google Gemini 1.5 Flash (AI ភាពយន្ត)", 4000)
+        else:
+            self.project.settings.translation_provider = "google"
+            self.translation_engine.settings = self.project.settings
+            self.status_bar.showMessage("បានជ្រើសរើស Engine: Google Translate (ចាស់/ឥតគិតថ្លៃ)", 4000)
+        self._on_data_changed()
+
     def _update_mixing_labels(self):
         s = STRINGS[self.lang]
         if hasattr(self, "lbl_orig_title"):
-            self.lbl_orig_title.setText(s.get("original_volume", "Original Audio Volume"))
+            self.lbl_orig_title.setText(s.get("original_voice_volume", "Original Voice Volume"))
+        if hasattr(self, "lbl_bg_title"):
+            self.lbl_bg_title.setText(s.get("background_volume", "Background (Music/SFX) Volume"))
         if hasattr(self, "lbl_dub_title"):
-            self.lbl_dub_title.setText(s.get("dubbed_volume", "Dubbed Voice Volume"))
-        if hasattr(self, "lbl_duck_title"):
-            self.lbl_duck_title.setText(s.get("ducking_level", "Ducking Reduction"))
+            self.lbl_dub_title.setText(s.get("ai_voice_volume", "AI Voice Volume"))
         if hasattr(self, "lbl_spd_title"):
             self.lbl_spd_title.setText(s.get("ai_voice_speed", "AI Voice Speed"))
         if hasattr(self, "btn_apply_spd_all"):
             self.btn_apply_spd_all.setText(s.get("btn_apply_speed_all", "⚡ អនុវត្តគ្រប់វគ្គ"))
         if hasattr(self, "chk_mute_orig"):
-            self.chk_mute_orig.setText(s["mute_original"])
+            self.chk_mute_orig.setText(s.get("mute_original", "Mute Original Audio"))
+        if hasattr(self, "chk_keep_bg"):
+            self.chk_keep_bg.setText(s.get("keep_background", "Keep Background"))
         if hasattr(self, "chk_burn_sub"):
-            self.chk_burn_sub.setText(s["burn_subtitles"])
+            self.chk_burn_sub.setText(s.get("burn_subtitles", "Burn Subtitles"))
+        if hasattr(self, "chk_mask_sub"):
+            self.chk_mask_sub.setText(s.get("mask_subtitles", "Mask Original Subtitles"))
+        if hasattr(self, "btn_mask_settings"):
+            self.btn_mask_settings.setText("⚙️ សារ៉េទីតាំង..." if self.lang == "km" else "⚙️ Position...")
+        self._update_mute_status_display()
 
         # Update tabs & logo panel labels
         if hasattr(self, "tool_tabs"):
@@ -718,38 +842,101 @@ class MainWindow(QMainWindow):
         if hasattr(self, "btn_main_preview"):
             self.btn_main_preview.setText("👁️ " + s.get("btn_preview_dubbed", "មើលលទ្ធផលសាកល្បង") + " (Ctrl+P)")
 
+    def _update_mute_status_display(self):
+        """Display consolidated 1-phrase mute status and keep checkbox & sliders synced."""
+        st = self.project.settings
+        orig_on = st.original_voice_volume > 0.001 and not st.mute_original
+        bg_on = st.background_volume > 0.001 and (st.keep_background or not st.mute_original)
+
+        orig_str = f"{int(st.original_voice_volume * 100)}%" if orig_on else "OFF"
+        bg_str = f"{int(st.background_volume * 100)}%" if bg_on else "OFF"
+
+        status_text = f"Original: {orig_str}, BG: {bg_str}"
+        if hasattr(self, "lbl_mute_summary"):
+            self.lbl_mute_summary.setText(f"[ {status_text} ]")
+            if not orig_on and not bg_on:
+                self.lbl_mute_summary.setStyleSheet("background: #7f1d1d; color: #fecaca; font-weight: bold; padding: 1px 6px; border-radius: 3px; font-size: 10px;")
+            elif not orig_on and bg_on:
+                self.lbl_mute_summary.setStyleSheet("background: #854d0e; color: #fde047; font-weight: bold; padding: 1px 6px; border-radius: 3px; font-size: 10px;")
+            else:
+                self.lbl_mute_summary.setStyleSheet("background: #064e3b; color: #34d399; font-weight: bold; padding: 1px 6px; border-radius: 3px; font-size: 10px;")
+
     def _on_mute_original_toggled(self, checked: bool):
         self.project.settings.mute_original = checked
         if checked:
             self.slider_orig_vol.setValue(0)
             self.slider_orig_vol.setEnabled(False)
+            self.project.settings.original_voice_volume = 0.0
             self.project.settings.original_volume = 0.0
             if hasattr(self, "lbl_orig_val"):
-                self.lbl_orig_val.setText("0% (MUTED 🔇)")
+                self.lbl_orig_val.setText("0% (OFF)")
+            if not self.project.settings.keep_background:
+                self.slider_bg_vol.setValue(0)
+                self.slider_bg_vol.setEnabled(False)
+                self.project.settings.background_volume = 0.0
+                if hasattr(self, "lbl_bg_val"):
+                    self.lbl_bg_val.setText("0% (OFF)")
         else:
             self.slider_orig_vol.setEnabled(True)
             self.slider_orig_vol.setValue(30)
+            self.project.settings.original_voice_volume = 0.3
             self.project.settings.original_volume = 0.3
             if hasattr(self, "lbl_orig_val"):
                 self.lbl_orig_val.setText("30%")
+            self.slider_bg_vol.setEnabled(True)
+            if self.slider_bg_vol.value() == 0:
+                self.slider_bg_vol.setValue(30)
+                self.project.settings.background_volume = 0.3
+            if hasattr(self, "lbl_bg_val"):
+                self.lbl_bg_val.setText(f"{self.slider_bg_vol.value()}%")
+        self._update_mute_status_display()
+        self._on_data_changed()
+
+    def _on_keep_bg_toggled(self, checked: bool):
+        self.project.settings.keep_background = checked
+        if checked:
+            self.slider_bg_vol.setEnabled(True)
+            if self.slider_bg_vol.value() == 0:
+                self.slider_bg_vol.setValue(30)
+                self.project.settings.background_volume = 0.3
+            if hasattr(self, "lbl_bg_val"):
+                self.lbl_bg_val.setText(f"{self.slider_bg_vol.value()}%")
+        elif self.project.settings.mute_original:
+            self.slider_bg_vol.setValue(0)
+            self.slider_bg_vol.setEnabled(False)
+            self.project.settings.background_volume = 0.0
+            if hasattr(self, "lbl_bg_val"):
+                self.lbl_bg_val.setText("0% (OFF)")
+        self._update_mute_status_display()
         self._on_data_changed()
 
     def _on_orig_vol_changed(self, val: int):
-        self.project.settings.original_volume = val / 100.0
+        vol = val / 100.0
+        self.project.settings.original_voice_volume = vol
+        self.project.settings.original_volume = vol
         if hasattr(self, "lbl_orig_val"):
-            self.lbl_orig_val.setText(f"{val}%")
+            self.lbl_orig_val.setText(f"{val}%" if val > 0 else "0% (OFF)")
         if val == 0:
-            self.project.settings.mute_original = True
-            if hasattr(self, "chk_mute_orig") and not self.chk_mute_orig.isChecked():
+            if not self.chk_mute_orig.isChecked() and (self.slider_bg_vol.value() == 0 or not self.project.settings.keep_background):
                 self.chk_mute_orig.blockSignals(True)
                 self.chk_mute_orig.setChecked(True)
                 self.chk_mute_orig.blockSignals(False)
+                self.project.settings.mute_original = True
         else:
-            self.project.settings.mute_original = False
-            if hasattr(self, "chk_mute_orig") and self.chk_mute_orig.isChecked():
+            if self.chk_mute_orig.isChecked():
                 self.chk_mute_orig.blockSignals(True)
                 self.chk_mute_orig.setChecked(False)
                 self.chk_mute_orig.blockSignals(False)
+                self.project.settings.mute_original = False
+        self._update_mute_status_display()
+        self._on_data_changed()
+
+    def _on_bg_vol_changed(self, val: int):
+        vol = val / 100.0
+        self.project.settings.background_volume = vol
+        if hasattr(self, "lbl_bg_val"):
+            self.lbl_bg_val.setText(f"{val}%" if val > 0 else "0% (OFF)")
+        self._update_mute_status_display()
         self._on_data_changed()
 
     def _on_dub_vol_changed(self, val: int):
@@ -912,14 +1099,19 @@ class MainWindow(QMainWindow):
         male_v, female_v = get_voice_pair_for_lang(t_lang)
         for i, s in enumerate(self.project.segments):
             pct = int((i / max(1, total)) * 100)
-            progress_cb(pct, f"កំពុងបកប្រែវគ្គ {i+1}/{total} ទៅជា {lang_lbl}...")
+            progress_cb(pct, f"កំពុងបកប្រែវគ្គ {i+1}/{total} ទៅជាសម្ដីនិយាយធម្មជាតិ ({lang_lbl})...")
+            prev_txt = self.project.segments[i - 1].text_src if i > 0 else ""
+            next_txt = self.project.segments[i + 1].text_src if i + 1 < total else ""
             s.text_km = self.translation_engine.translate_segment(
                 src_text=s.text_src,
                 glossary=self.project.glossary,
-                target_lang=t_lang
+                context_before=prev_txt,
+                context_after=next_txt,
+                target_lang=t_lang,
+                slot_duration=s.slot
             )
             # Ensure segment voice matches target language & invalidate old TTS audio
-            s.voice = female_v if is_female_voice(s.voice) else male_v
+            s.voice = male_v
             s.tts_file = ""
             s.tts_duration = 0.0
         return self.project.segments
@@ -958,15 +1150,24 @@ class MainWindow(QMainWindow):
 
     def _worker_tts(self, progress_cb):
         import time
+        import re
         total = len(self.project.segments)
         global_speed = getattr(self.project.settings, "ai_voice_speed", 1.05)
+        t_lang = getattr(self.project.settings, "target_language", "km") or "km"
 
-        # Check for segments missing Khmer translation and translate them
-        missing_km = [s for s in self.project.segments if not s.text_km.strip() and s.text_src.strip()]
+        # Check for segments missing translation (or still containing untranslated foreign script when target is Khmer)
+        missing_km = [
+            s for s in self.project.segments
+            if s.text_src.strip() and (
+                not s.text_km.strip() or (
+                    t_lang == "km" and not re.search(r'[\u1780-\u17d3\u17d5-\u17ff]', s.text_km)
+                )
+            )
+        ]
         if missing_km:
             progress_cb(2, f"កំពុងបកប្រែវគ្គខ្វះ {len(missing_km)} វគ្គ...")
             try:
-                self.translation_engine.translate_segments(missing_km)
+                self.translation_engine.translate_segments(missing_km, target_lang=t_lang)
             except Exception as e:
                 print(f"[MainWindow] Auto-translate notice: {e}")
 
@@ -977,7 +1178,7 @@ class MainWindow(QMainWindow):
             progress_cb(pct, f"កំពុងបង្កើតសំឡេង AI ប្រុស វគ្គ {i+1}/{total} (ID: {s.id})...")
             self.tts_engine.generate_segment_tts(s, speed_factor=target_speed)
             s.is_modified = False
-            time.sleep(0.05)
+            time.sleep(0.08)
 
         # Automatically run 4-stage time-sync & lip-sync alignment right after generating voices!
         progress_cb(90, "កំពុងតម្រឹមសំឡេងឱ្យស៊ីគ្នាជាមួយមាត់តួអង្គ (Auto Lip-Sync)...")
@@ -1183,6 +1384,8 @@ class MainWindow(QMainWindow):
         dlg = SettingsDialog(self.project.settings, lang=self.lang, parent=self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self.translation_engine.settings = self.project.settings
+            if hasattr(self, "cb_trans_provider"):
+                self._populate_trans_providers()
             if hasattr(self, "cb_target_lang"):
                 t_idx = self.cb_target_lang.findData(getattr(self.project.settings, "target_language", "km") or "km")
                 if t_idx >= 0 and t_idx != self.cb_target_lang.currentIndex():
@@ -1190,6 +1393,33 @@ class MainWindow(QMainWindow):
                 else:
                     self._on_target_lang_changed()
             self._update_mixing_labels()
+            self._on_data_changed()
+
+    def _open_subtitle_mask_dialog(self):
+        from app.ui.subtitle_mask_dialog import SubtitleMaskDialog
+        cur_time = 2.0
+        if hasattr(self, "video_player") and hasattr(self.video_player, "get_current_time"):
+            try:
+                cur_time = self.video_player.get_current_time()
+            except Exception:
+                cur_time = 2.0
+
+        dlg = SubtitleMaskDialog(
+            settings=self.project.settings,
+            video_path=self.project.video_path,
+            current_time=cur_time,
+            lang=self.lang,
+            parent=self
+        )
+        if dlg.exec():
+            if hasattr(self, "chk_mask_sub"):
+                self.chk_mask_sub.setChecked(self.project.settings.mask_subtitles)
+            self.status_bar.showMessage(
+                "បានរក្សាទុកទីតាំងផ្ទាំងបិទបាំងអក្សរចិន (Subtitle Mask) រួចរាល់!"
+                if self.lang == "km" else
+                "Subtitle mask and positioning saved successfully!",
+                4000
+            )
             self._on_data_changed()
 
     def _show_srs_help(self):

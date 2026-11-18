@@ -25,6 +25,7 @@ server/.env
 server/public/downloads/*.exe
 
 # IDE & OS files
+scratch/
 .vscode/
 .idea/
 Thumbs.db

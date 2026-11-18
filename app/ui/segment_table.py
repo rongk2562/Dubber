@@ -230,19 +230,19 @@ class SegmentTableWidget(QWidget):
         header.setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)
         header.setHighlightSections(False)
 
-        # Balanced column widths so all 12 columns fit on screen and text columns expand equally
+        # Balanced column widths so all 12 columns fit 100% inside the table viewport without clipping 'សកម្មភាព'
         self._col_widths = {
-            self.COL_ID: 38,
-            self.COL_START: 64,
-            self.COL_END: 64,
-            self.COL_SLOT: 60,
-            self.COL_SPEAKER: 66,
-            self.COL_SRC: 160,
-            self.COL_KM: 160,
-            self.COL_VOICE: 110,
-            self.COL_TTS_DUR: 68,
-            self.COL_SPEED: 74,
-            self.COL_STATUS: 76,
+            self.COL_ID: 32,
+            self.COL_START: 58,
+            self.COL_END: 52,
+            self.COL_SLOT: 48,
+            self.COL_SPEAKER: 48,
+            self.COL_SRC: 130,
+            self.COL_KM: 130,
+            self.COL_VOICE: 86,
+            self.COL_TTS_DUR: 58,
+            self.COL_SPEED: 58,
+            self.COL_STATUS: 70,
             self.COL_ACTIONS: 74,
         }
         for col, width in self._col_widths.items():
@@ -253,6 +253,29 @@ class SegmentTableWidget(QWidget):
         self.table.itemSelectionChanged.connect(self._on_selection_changed)
 
         layout.addWidget(self.table)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._adjust_column_widths()
+
+    def _adjust_column_widths(self):
+        """Dynamically distribute extra viewport space to text columns while preserving full visibility of 'សកម្មភាព'."""
+        try:
+            total_w = self.table.viewport().width()
+            if total_w <= 100:
+                return
+            fixed_sum = sum(w for col, w in self._col_widths.items() if col not in (self.COL_SRC, self.COL_KM))
+            avail_for_text = max(160, total_w - fixed_sum - 4)
+            half_w = avail_for_text // 2
+            for col, width in self._col_widths.items():
+                if col == self.COL_SRC:
+                    self.table.setColumnWidth(col, half_w)
+                elif col == self.COL_KM:
+                    self.table.setColumnWidth(col, avail_for_text - half_w)
+                else:
+                    self.table.setColumnWidth(col, width)
+        except Exception:
+            pass
 
     def set_language(self, lang: str):
         self.lang = lang
@@ -324,13 +347,18 @@ class SegmentTableWidget(QWidget):
             item_id.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.table.setItem(row, self.COL_ID, item_id)
 
-            # 1: Start
-            item_start = QTableWidgetItem(f"{seg.start:.2f}")
+            # 1: Start (MM:SS.ms matching original video clock)
+            from app.utils import format_timestamp
+            start_disp = format_timestamp(seg.start, srt_format=False)
+            item_start = QTableWidgetItem(start_disp)
+            item_start.setToolTip(f"{start_disp} ({seg.start:.2f}s)")
             item_start.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.table.setItem(row, self.COL_START, item_start)
 
-            # 2: End
-            item_end = QTableWidgetItem(f"{seg.end:.2f}")
+            # 2: End (MM:SS.ms matching original video clock)
+            end_disp = format_timestamp(seg.end, srt_format=False)
+            item_end = QTableWidgetItem(end_disp)
+            item_end.setToolTip(f"{end_disp} ({seg.end:.2f}s)")
             item_end.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.table.setItem(row, self.COL_END, item_end)
 
@@ -367,7 +395,7 @@ class SegmentTableWidget(QWidget):
             btn_lbl = f"👨 ប្រុស ({actor_name})" if self.lang == "km" else f"👨 Male ({actor_name})"
             lbl_voice = QLabel(btn_lbl)
             lbl_voice.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            lbl_voice.setStyleSheet("background-color: #0c4a6e; color: #38bdf8; font-weight: bold; border-radius: 4px; padding: 4px 6px;")
+            lbl_voice.setStyleSheet("background-color: #0c4a6e; color: #38bdf8; font-weight: bold; font-size: 11px; border-radius: 4px; padding: 2px 3px;")
             self.table.setCellWidget(row, self.COL_VOICE, lbl_voice)
 
             # 8: TTS Duration
@@ -391,12 +419,15 @@ class SegmentTableWidget(QWidget):
                     font-weight: bold;
                     border: 1px solid #334155;
                     border-radius: 4px;
-                    padding: 1px 2px;
+                    padding: 1px 0px;
                     font-size: 11px;
                 }
                 QDoubleSpinBox:hover {
                     border-color: #0284c7;
                     color: #7dd3fc;
+                }
+                QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {
+                    width: 13px;
                 }
             """)
             spin_speed.valueChanged.connect(lambda val, s=seg: self._on_seg_speed_spin_changed(s, val))
@@ -411,9 +442,24 @@ class SegmentTableWidget(QWidget):
             act_layout.setContentsMargins(2, 2, 2, 2)
             act_layout.setSpacing(4)
 
+            btn_style = """
+                QPushButton {
+                    padding: 0px;
+                    font-size: 11px;
+                    border-radius: 4px;
+                    background-color: #1e293b;
+                    border: 1px solid #334155;
+                }
+                QPushButton:hover {
+                    background-color: #0284c7;
+                    border-color: #38bdf8;
+                }
+            """
+
             btn_play = QPushButton("▶")
             btn_play.setToolTip("Play video segment" if self.lang == "en" else "ចាក់វគ្គនេះក្នុងវីដេអូ")
-            btn_play.setFixedWidth(28)
+            btn_play.setFixedSize(28, 24)
+            btn_play.setStyleSheet(btn_style)
             btn_play.clicked.connect(
                 lambda checked, s=seg: self.play_segment_requested.emit(
                     s.speech_start,
@@ -424,24 +470,36 @@ class SegmentTableWidget(QWidget):
 
             btn_tts = QPushButton("🔊")
             btn_tts.setToolTip("Preview Khmer voice" if self.lang == "en" else "ស្ដាប់សំឡេង AI ខ្មែរ")
-            btn_tts.setFixedWidth(28)
+            btn_tts.setFixedSize(28, 24)
+            btn_tts.setStyleSheet(btn_style)
             btn_tts.clicked.connect(lambda checked, s=seg: self.preview_tts_requested.emit(s))
             act_layout.addWidget(btn_tts)
 
             self.table.setCellWidget(row, self.COL_ACTIONS, action_widget)
 
         self._is_populating = False
+        self._adjust_text_columns()
 
     def _update_status_cell(self, row: int, seg: Segment):
-        """Render colored badge based on SRS Time-sync rules."""
+        """Render colored badge based on SRS Time-sync rules & speech-rate QA gate."""
         s = STRINGS.get(self.lang, STRINGS["km"])
         status = seg.sync_status
         label_text = s.get("sync_ok", "OK")
         bg_color = "#065f46" # Green
         fg_color = "#34d399"
 
-        if status == "SPEED_ADJUSTED":
-            label_text = s.get("sync_speed_adj", "Speed Adj")
+        # Calculate actual speech rate
+        from app.dubbing.speech_rate import khmer_syllable_count
+        syl = khmer_syllable_count(seg.text_km or seg.text_src)
+        dur = max(0.2, seg.tts_duration or seg.slot)
+        syl_rate = round(syl / dur, 1)
+
+        if syl_rate > 7.5:
+            label_text = f"⚡ {syl_rate}/s"
+            bg_color = "#881337" # Red highlight
+            fg_color = "#fda4af"
+        elif status in ("SPEED_ADJUSTED", "SPED_UP"):
+            label_text = f"{seg.speed:.2f}x"
             bg_color = "#1e3a8a" # Blue
             fg_color = "#60a5fa"
         elif status == "SHORTENED":
@@ -466,6 +524,7 @@ class SegmentTableWidget(QWidget):
         item_status.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
         item_status.setBackground(QColor(bg_color))
         item_status.setForeground(QColor(fg_color))
+        item_status.setToolTip(f"{syl} syllables / {dur:.2f}s = {syl_rate} syl/sec | Speed: {seg.speed:.2f}x | Status: {status}")
         self.table.setItem(row, self.COL_STATUS, item_status)
 
     def _on_item_changed(self, item: QTableWidgetItem):
@@ -479,13 +538,16 @@ class SegmentTableWidget(QWidget):
         seg = self.project.segments[row]
 
         try:
+            from app.utils import parse_timestamp
             if col == self.COL_START:
-                seg.start = float(item.text())
+                seg.start = round(parse_timestamp(item.text()), 2)
+                seg.actual_start = seg.start
                 slot_item = self.table.item(row, self.COL_SLOT)
                 if slot_item:
                     slot_item.setText(f"{seg.slot:.2f}")
             elif col == self.COL_END:
-                seg.end = float(item.text())
+                seg.end = round(parse_timestamp(item.text()), 2)
+                seg.actual_end = seg.end
                 slot_item = self.table.item(row, self.COL_SLOT)
                 if slot_item:
                     slot_item.setText(f"{seg.slot:.2f}")
@@ -849,7 +911,7 @@ class SegmentTableWidget(QWidget):
         count = 0
         for seg in target_segs:
             old_km = seg.text_km
-            new_km = tr_engine.humanize_khmer_dialogue(seg.text_km, seg.text_src)
+            new_km = tr_engine.humanize_khmer_dialogue(seg.text_km, seg.text_src, slot_duration=seg.slot)
             if new_km != old_km:
                 seg.text_km = new_km
                 seg.tts_file = "" # invalidate clip so user regenerates with emotional prosody
@@ -880,7 +942,7 @@ class SegmentTableWidget(QWidget):
         self._adjust_text_columns()
 
     def _adjust_text_columns(self):
-        """Dynamically allocate extra table width to text columns without squishing headers."""
+        """Dynamically allocate remaining table width to text columns so all 12 columns fit flush inside the viewport."""
         if not hasattr(self, "table") or not hasattr(self, "_col_widths"):
             return
         fixed_cols = [
@@ -888,22 +950,18 @@ class SegmentTableWidget(QWidget):
             self.COL_SPEAKER, self.COL_VOICE, self.COL_TTS_DUR,
             self.COL_SPEED, self.COL_STATUS, self.COL_ACTIONS
         ]
-        fixed_total = sum(self.table.columnWidth(c) for c in fixed_cols)
+        fixed_total = sum(self.table.columnWidth(c) for c in fixed_cols if not self.table.isColumnHidden(c))
         viewport_w = self.table.viewport().width()
-        available = viewport_w - fixed_total - 6
+        available = viewport_w - fixed_total - 2
 
-        min_src = self._col_widths.get(self.COL_SRC, 200)
-        min_km = self._col_widths.get(self.COL_KM, 220)
-        min_total = min_src + min_km
-
-        if available > min_total:
-            src_w = int(available * 0.50)
+        if available >= 160:
+            src_w = available // 2
             km_w = available - src_w
-            self.table.setColumnWidth(self.COL_SRC, max(min_src, src_w))
-            self.table.setColumnWidth(self.COL_KM, max(min_km, km_w))
+            self.table.setColumnWidth(self.COL_SRC, src_w)
+            self.table.setColumnWidth(self.COL_KM, km_w)
         else:
-            if self.table.columnWidth(self.COL_SRC) < min_src:
-                self.table.setColumnWidth(self.COL_SRC, min_src)
-            if self.table.columnWidth(self.COL_KM) < min_km:
-                self.table.setColumnWidth(self.COL_KM, min_km)
+            min_src = self._col_widths.get(self.COL_SRC, 120)
+            min_km = self._col_widths.get(self.COL_KM, 120)
+            self.table.setColumnWidth(self.COL_SRC, min_src)
+            self.table.setColumnWidth(self.COL_KM, min_km)
 

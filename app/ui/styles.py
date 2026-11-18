@@ -125,7 +125,7 @@ QHeaderView::section {
     color: #93c5fd;
     font-weight: 600;
     font-size: 12px;
-    padding: 7px 10px;
+    padding: 7px 4px;
     border: none;
     border-right: 1px solid #374151;
     border-bottom: 2px solid #0284c7;

@@ -16,6 +16,26 @@ class ExportEngine:
     def __init__(self, audio_engine: Optional[AudioEngine] = None):
         self.audio_engine = audio_engine or AudioEngine()
 
+    def _get_video_dimensions(self, video_path: str) -> tuple[int, int]:
+        """Return (width, height) of the video using ffprobe."""
+        if not video_path or not os.path.exists(video_path):
+            return 1280, 720
+        cmd = [
+            "ffprobe", "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=width,height",
+            "-of", "csv=s=x:p=0",
+            video_path
+        ]
+        try:
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
+            parts = res.stdout.strip().split("x")
+            if len(parts) >= 2:
+                return int(parts[0]), int(parts[1])
+        except Exception:
+            pass
+        return 1280, 720
+
     def export_all(
         self,
         project: Project,
@@ -40,21 +60,18 @@ class ExportEngine:
 
         total_duration = self.audio_engine.get_media_duration(project.video_path)
 
-        # Step 0: Ensure missing audio clips are generated (skip redundant online network sync)
+        # Step 0: Ensure missing audio clips are generated (with TTSFitter retry >= 3 & -16 LUFS norm)
+        from app.dubbing.tts_fitter import TTSFitter
+        fitter = TTSFitter(temp_dir=self.audio_engine.temp_dir)
         missing_tts = [
             s for s in project.segments
-            if (s.text_km or s.text_src) and (not s.tts_file or not os.path.exists(s.tts_file))
+            if (s.text_km or s.text_src) and (not s.tts_file or not os.path.exists(s.tts_file) or os.path.getsize(s.tts_file) <= 180)
         ]
         if missing_tts:
-            from app.tts_engine import TTSEngine
-            tts_engine = TTSEngine()
-            for idx, seg in enumerate(missing_tts):
-                if progress_cb:
-                    progress_cb(5 + int((idx / len(missing_tts)) * 5), f"Generating missing voice {idx+1}/{len(missing_tts)}...")
-                try:
-                    tts_engine.generate_segment_tts(seg)
-                except Exception as e:
-                    print(f"[ExportEngine] Warning generating TTS for segment {seg.id}: {e}")
+            fitter.process_all_segments(
+                missing_tts,
+                progress_cb=lambda pct, msg: progress_cb(5 + int(pct * 0.08), msg) if progress_cb else None
+            )
 
         # Step 1: Build continuous dubbed voice track
         if progress_cb:
@@ -63,7 +80,7 @@ class ExportEngine:
         dubbed_wav = self.audio_engine.build_dubbed_audio_track(
             total_duration_sec=total_duration,
             segments=project.segments,
-            progress_cb=lambda pct, msg: progress_cb(10 + int(pct * 0.2), msg) if progress_cb else None
+            progress_cb=lambda pct, msg: progress_cb(15 + int(pct * 0.15), msg) if progress_cb else None
         )
 
         # Step 2: Ensure stereo original audio extracted
@@ -81,121 +98,130 @@ class ExportEngine:
             dubbed_audio_path=dubbed_wav,
             segments=project.segments,
             original_vol_factor=project.settings.original_volume,
+            original_voice_vol=getattr(project.settings, "original_voice_volume", 0.0),
+            background_vol=getattr(project.settings, "background_volume", 0.30),
             dubbed_vol_factor=project.settings.dubbed_volume,
+            mute_original=project.settings.mute_original,
+            keep_background=getattr(project.settings, "keep_background", True),
             ducking_db=project.settings.ducking_db,
             fade_ms=project.settings.ducking_fade_ms,
             progress_cb=lambda pct, msg: progress_cb(40 + int(pct * 0.25), msg) if progress_cb else None
         )
+
+        # Post-export Silence Verification if Mute is enabled
+        if project.settings.mute_original:
+            from app.dubbing.mixer import TimelineMixer
+            passed_silence, max_vol, silence_msg = TimelineMixer.verify_mute_silence(final_mixed_wav, project.segments)
+            if not passed_silence:
+                print(f"[ExportEngine] WARNING: {silence_msg}")
 
         # Optional WAV export
         if export_wav_path:
             import shutil
             shutil.copy(final_mixed_wav, export_wav_path)
 
-        # Step 4: Generate SRT subtitles
+        # Step 4: Generate SRT subtitles (using SubtitleRenderer with glossary & word wrapping)
         if progress_cb:
             progress_cb(70, "3/4 Generating Khmer subtitle file (SRT)...")
-        srt_content = generate_srt(project.segments, language="km")
-        
+        from app.dubbing.subtitle_renderer import SubtitleRenderer
         srt_file = export_srt_path or str(Path(output_mp4_path).with_suffix(".srt"))
-        with open(srt_file, "w", encoding="utf-8") as f:
-            f.write(srt_content)
+        SubtitleRenderer.generate_srt(
+            segments=project.segments,
+            output_srt_path=srt_file,
+            custom_glossary=project.glossary
+        )
 
-        # Step 5: Mux / Render MP4 Video with optional Subtitles and Logo Overlay
+        # Step 5: Mux / Render MP4 Video with Subtitles, Chinese Subtitle Masking & Logo Overlay
         if progress_cb:
             progress_cb(80, "4/4 Muxing final video with FFmpeg...")
 
-        norm_srt = srt_file.replace("\\", "/").replace(":", "\\:")
         has_logo = (
             project.settings.logo_enabled
             and bool(project.settings.logo_path)
             and os.path.exists(project.settings.logo_path)
         )
 
-        pos = project.settings.logo_position
-        mx = project.settings.logo_margin_x
-        my = project.settings.logo_margin_y
-        if pos == "top_left":
-            pos_expr = f"{mx}:{my}"
-        elif pos == "bottom_left":
-            pos_expr = f"{mx}:H-h-{my}"
-        elif pos == "bottom_right":
-            pos_expr = f"W-w-{mx}:H-h-{my}"
-        elif pos == "center":
-            pos_expr = f"(W-w)/2:(H-h)/2"
-        else: # top_right
-            pos_expr = f"W-w-{mx}:{my}"
+        font_to_use = getattr(project.settings, "subtitle_font", "Noto Sans Khmer") or "Noto Sans Khmer"
+        vid_w, vid_h = self._get_video_dimensions(project.video_path)
 
-        logo_w = project.settings.logo_width
-        logo_op = max(0.1, min(project.settings.logo_opacity, 1.0))
-
-        if burn_subtitles and has_logo:
-            # Case 1: Subtitles + Logo
-            f_complex = (
-                f"[0:v]subtitles='{norm_srt}':force_style='Fontname={project.settings.subtitle_font},Fontsize=18,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=3,Outline=1.5,Shadow=1'[subbed];"
-                f"[2:v]scale={logo_w}:-1,format=rgba,colorchannelmixer=aa={logo_op:.2f}[logo];"
-                f"[subbed][logo]overlay={pos_expr}[v_out]"
+        if burn_subtitles:
+            video_filter = SubtitleRenderer.build_video_filter(
+                srt_path=srt_file,
+                mask_original_subs=getattr(project.settings, "mask_subtitles", True),
+                font_name=font_to_use,
+                font_size=getattr(project.settings, "subtitle_font_size", 20),
+                mask_y_pct=getattr(project.settings, "mask_y_percent", 83.0),
+                mask_h_pct=getattr(project.settings, "mask_height_percent", 12.0),
+                mask_w_pct=getattr(project.settings, "mask_width_percent", 100.0),
+                mask_x_pct=getattr(project.settings, "mask_x_percent", 0.0),
+                mask_opacity=getattr(project.settings, "mask_opacity", 0.95),
+                mask_color=getattr(project.settings, "mask_color", "black"),
+                subtitle_margin_v=getattr(project.settings, "subtitle_margin_v", 25),
+                video_w=vid_w,
+                video_h=vid_h,
+                logo_path=project.settings.logo_path if has_logo else None,
+                logo_pos=project.settings.logo_position,
+                logo_w=project.settings.logo_width,
+                logo_opacity=project.settings.logo_opacity,
+                logo_margin_x=project.settings.logo_margin_x,
+                logo_margin_y=project.settings.logo_margin_y
             )
+
             cmd = [
                 "ffmpeg", "-y",
                 "-i", project.video_path,
                 "-i", final_mixed_wav,
-                "-i", project.settings.logo_path,
-                "-filter_complex", f_complex,
+            ]
+            if has_logo:
+                cmd.extend(["-i", project.settings.logo_path])
+                cmd.extend(["-filter_complex", video_filter, "-map", "[v_out]"])
+            else:
+                cmd.extend(["-vf", video_filter, "-map", "0:v:0"])
+
+            cmd.extend([
+                "-map", "1:a:0",
                 "-c:v", "libx264",
                 "-crf", "22",
                 "-preset", "veryfast",
                 "-threads", "0",
                 "-c:a", "aac",
                 "-b:a", "192k",
-                "-map", "[v_out]",
-                "-map", "1:a:0",
+                "-ar", "48000",
                 "-shortest",
                 output_mp4_path
-            ]
+            ])
         elif has_logo:
-            # Case 2: Logo only
-            f_complex = (
-                f"[2:v]scale={logo_w}:-1,format=rgba,colorchannelmixer=aa={logo_op:.2f}[logo];"
-                f"[0:v][logo]overlay={pos_expr}[v_out]"
+            # Logo only
+            video_filter = SubtitleRenderer.build_video_filter(
+                srt_path=srt_file,
+                mask_original_subs=False,
+                logo_path=project.settings.logo_path,
+                logo_pos=project.settings.logo_position,
+                logo_w=project.settings.logo_width,
+                logo_opacity=project.settings.logo_opacity,
+                logo_margin_x=project.settings.logo_margin_x,
+                logo_margin_y=project.settings.logo_margin_y
             )
             cmd = [
                 "ffmpeg", "-y",
                 "-i", project.video_path,
                 "-i", final_mixed_wav,
                 "-i", project.settings.logo_path,
-                "-filter_complex", f_complex,
-                "-c:v", "libx264",
-                "-crf", "22",
-                "-preset", "veryfast",
-                "-threads", "0",
-                "-c:a", "aac",
-                "-b:a", "192k",
+                "-filter_complex", video_filter,
                 "-map", "[v_out]",
                 "-map", "1:a:0",
-                "-shortest",
-                output_mp4_path
-            ]
-        elif burn_subtitles:
-            # Case 3: Subtitles only
-            cmd = [
-                "ffmpeg", "-y",
-                "-i", project.video_path,
-                "-i", final_mixed_wav,
-                "-vf", f"subtitles='{norm_srt}':force_style='Fontname={project.settings.subtitle_font},Fontsize=18,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=3,Outline=1.5,Shadow=1'",
                 "-c:v", "libx264",
                 "-crf", "22",
                 "-preset", "veryfast",
                 "-threads", "0",
                 "-c:a", "aac",
                 "-b:a", "192k",
-                "-map", "0:v:0",
-                "-map", "1:a:0",
+                "-ar", "48000",
                 "-shortest",
                 output_mp4_path
             ]
         else:
-            # Case 4: Audio mux only (Ultra-fast direct copy)
+            # Case 4: Audio mux only
             cmd = [
                 "ffmpeg", "-y",
                 "-i", project.video_path,
@@ -203,6 +229,7 @@ class ExportEngine:
                 "-c:v", "copy",
                 "-c:a", "aac",
                 "-b:a", "192k",
+                "-ar", "48000",
                 "-map", "0:v:0",
                 "-map", "1:a:0",
                 "-shortest",
@@ -214,7 +241,6 @@ class ExportEngine:
             encoding="utf-8", errors="replace"
         )
         if res.returncode != 0:
-            # If complex filtering failed, fallback to audio stream copy
             fallback_cmd = [
                 "ffmpeg", "-y",
                 "-i", project.video_path,
@@ -222,6 +248,7 @@ class ExportEngine:
                 "-c:v", "copy",
                 "-c:a", "aac",
                 "-b:a", "192k",
+                "-ar", "48000",
                 "-map", "0:v:0",
                 "-map", "1:a:0",
                 "-shortest",
@@ -231,6 +258,17 @@ class ExportEngine:
                 fallback_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True,
                 encoding="utf-8", errors="replace"
             )
+
+        # Step 6: Automated QA Verification & Report Generation
+        from app.dubbing.qa_checker import QAChecker
+        out_parent = Path(output_mp4_path).parent
+        qa = QAChecker(output_dir=out_parent)
+        qa.generate_report(
+            segments=project.segments,
+            original_duration=total_duration,
+            final_audio_path=final_mixed_wav,
+            export_dir=str(out_parent)
+        )
 
         # Store result video path
         project.settings.result_video_path = output_mp4_path
@@ -254,23 +292,20 @@ class ExportEngine:
         if not project.video_path or not os.path.exists(project.video_path):
             raise FileNotFoundError("សូមនាំចូលវីដេអូដើមជាមុនសិន!")
 
-        # Ensure any missing TTS clips are generated
+        # Ensure any missing TTS clips are generated (using TTSFitter retry >= 3)
+        from app.dubbing.tts_fitter import TTSFitter
+        fitter = TTSFitter(temp_dir=self.audio_engine.temp_dir)
         missing_tts = [
             s for s in project.segments
-            if (s.text_km or s.text_src) and (not s.tts_file or not os.path.exists(s.tts_file))
+            if (s.text_km or s.text_src) and (not s.tts_file or not os.path.exists(s.tts_file) or os.path.getsize(s.tts_file) <= 180)
         ]
         if missing_tts:
-            from app.tts_engine import TTSEngine
-            tts_engine = TTSEngine()
-            for idx, seg in enumerate(missing_tts):
-                if progress_cb:
-                    progress_cb(2 + int((idx / len(missing_tts)) * 10), f"Generating voice clip {idx+1}/{len(missing_tts)}...")
-                try:
-                    tts_engine.generate_segment_tts(seg)
-                except Exception as e:
-                    print(f"[ExportEngine] Note generating TTS for segment {seg.id}: {e}")
+            fitter.process_all_segments(
+                missing_tts,
+                progress_cb=lambda pct, msg: progress_cb(2 + int(pct * 0.12), msg) if progress_cb else None
+            )
 
-        has_any_tts = any(bool(s.tts_file and os.path.exists(s.tts_file)) for s in project.segments)
+        has_any_tts = any(bool(s.tts_file and os.path.exists(s.tts_file) and os.path.getsize(s.tts_file) > 180) for s in project.segments)
         if not has_any_tts:
             raise ValueError("មិនទាន់មានសំឡេង AI ខ្មែរនៅឡើយទេ។ សូមដំណើរការ '៣. បង្កើតសំឡេង AI ខ្មែរ' ជាមុនសិន!")
 
@@ -304,7 +339,11 @@ class ExportEngine:
             dubbed_audio_path=preview_dubbed_wav,
             segments=project.segments,
             original_vol_factor=project.settings.original_volume,
+            original_voice_vol=getattr(project.settings, "original_voice_volume", 0.0),
+            background_vol=getattr(project.settings, "background_volume", 0.30),
             dubbed_vol_factor=project.settings.dubbed_volume,
+            mute_original=project.settings.mute_original,
+            keep_background=getattr(project.settings, "keep_background", True),
             ducking_db=project.settings.ducking_db,
             fade_ms=project.settings.ducking_fade_ms,
             output_wav=preview_mixed_wav,
