@@ -84,6 +84,15 @@ from app.ui.styles import DARK_THEME_QSS
 
 
 def main():
+    # Clean up any leftover .exe.old backup from a previous in-place self-update
+    if getattr(sys, "frozen", False):
+        old_bak = Path(sys.executable).resolve().with_name(Path(sys.executable).name + ".old")
+        if old_bak.exists():
+            try:
+                old_bak.unlink()
+            except Exception:
+                pass
+
     # Enable high DPI scaling
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough

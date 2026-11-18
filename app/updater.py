@@ -189,60 +189,87 @@ def download_update_file(
 def apply_update_and_restart(new_exe_path: str) -> bool:
     """
     Apply update to the running Windows .exe application and restart cleanly.
-    Creates a detached batch script that waits for current process termination,
-    replaces the executable, launches the new executable, and cleans up.
+    1. Performs an immediate NTFS atomic rename of the running executable (current.exe -> current.exe.old)
+       and copies the new executable into place while still running.
+    2. Launches a background runner script (using ping delays instead of timeout.exe, which fails
+       in headless/detached processes) with a 15-retry fallback loop to clean up and relaunch.
     """
+    import shutil
     is_frozen = getattr(sys, "frozen", False)
     current_exe = os.path.abspath(sys.executable)
+    new_exe_abs = os.path.abspath(new_exe_path)
 
     if not is_frozen:
-        # Running in dev/python mode
-        print(f"[Updater] Dev mode: new update saved to {new_exe_path}")
+        print(f"[Updater] Dev mode: new update saved to {new_exe_abs}")
         return False
+
+    old_exe_backup = current_exe + ".old"
+    swapped_in_place = False
+    try:
+        if os.path.exists(old_exe_backup):
+            try:
+                os.remove(old_exe_backup)
+            except Exception:
+                pass
+        # Windows NTFS allows renaming a running .exe file in-place!
+        os.replace(current_exe, old_exe_backup)
+        shutil.copy2(new_exe_abs, current_exe)
+        swapped_in_place = True
+    except Exception as e:
+        print(f"[Updater] Note during in-place NTFS rename: {e}")
 
     current_pid = os.getpid()
     bat_path = Path(TEMP_DIR) / "updater_runner.bat"
 
     bat_content = f"""@echo off
-setlocal
+setlocal EnableDelayedExpansion
 set "CURRENT_EXE={current_exe}"
-set "NEW_EXE={os.path.abspath(new_exe_path)}"
+set "OLD_EXE={old_exe_backup}"
+set "NEW_EXE={new_exe_abs}"
 set "PID={current_pid}"
 
-echo [AI Studio Updater] Waiting for application (PID %PID%) to close...
-timeout /t 1 /nobreak >nul
+ping 127.0.0.1 -n 2 >nul
 
 :wait_loop
 tasklist /fi "pid eq %PID%" 2>nul | find "%PID%" >nul
 if not errorlevel 1 (
-    timeout /t 1 /nobreak >nul
+    ping 127.0.0.1 -n 2 >nul
     goto wait_loop
 )
 
-echo [AI Studio Updater] Installing new version...
-timeout /t 1 /nobreak >nul
-copy /y "%NEW_EXE%" "%CURRENT_EXE%" >nul
-if errorlevel 1 (
-    echo [AI Studio Updater] Failed to replace executable.
-    pause
-    exit /b 1
+for /L %%i in (1,1,10) do (
+    if exist "%NEW_EXE%" (
+        move /y "%CURRENT_EXE%" "%OLD_EXE%" >nul 2>&1
+        copy /y "%NEW_EXE%" "%CURRENT_EXE%" >nul 2>&1
+        if not errorlevel 1 (
+            del /f /q "%NEW_EXE%" >nul 2>&1
+            goto launch_new
+        )
+        ping 127.0.0.1 -n 2 >nul
+    ) else (
+        goto launch_new
+    )
 )
 
-del "%NEW_EXE%" >nul
-echo [AI Studio Updater] Relaunching application...
+REM If standard copy into C:\Program Files was blocked by Windows UAC, elevate via PowerShell RunAs:
+if exist "%NEW_EXE%" (
+    powershell -NoProfile -Command "Start-Process cmd.exe -ArgumentList '/c move /y ""%CURRENT_EXE%"" ""%OLD_EXE%"" >nul 2>&1 & copy /y ""%NEW_EXE%"" ""%CURRENT_EXE%"" >nul 2>&1 & del /f /q ""%NEW_EXE%"" >nul 2>&1 & del /f /q ""%OLD_EXE%"" >nul 2>&1' -Verb RunAs -WindowStyle Hidden -Wait"
+)
+
+:launch_new
+del /f /q "%OLD_EXE%" >nul 2>&1
 start "" "%CURRENT_EXE%"
 (goto) 2>nul & del "%~f0"
 """
 
-    with open(bat_path, "w", encoding="ascii", errors="ignore") as f:
+    with open(bat_path, "w", encoding="utf-8") as f:
         f.write(bat_content)
 
-    # Launch detached batch script in background
-    DETACHED_PROCESS = 0x00000008
+    CREATE_NEW_PROCESS_GROUP = 0x00000200
     CREATE_NO_WINDOW = 0x08000000
     subprocess.Popen(
         ["cmd.exe", "/c", str(bat_path)],
-        creationflags=DETACHED_PROCESS | CREATE_NO_WINDOW,
+        creationflags=CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW,
         close_fds=True
     )
     return True

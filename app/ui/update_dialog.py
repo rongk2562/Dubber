@@ -277,7 +277,9 @@ class UpdateDialog(QDialog):
             box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
             if box.exec() == QMessageBox.StandardButton.Yes:
                 apply_update_and_restart(new_exe_path)
+                QApplication.closeAllWindows()
                 QApplication.quit()
+                os._exit(0)
         else:
             QMessageBox.information(
                 self,

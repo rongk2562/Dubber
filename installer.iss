@@ -48,8 +48,9 @@ Name: "{app}\whisper_models"; Permissions: users-modify
 
 [Files]
 ; CRITICAL: Copy the entire PyInstaller onedir contents including _internal\, ffmpeg_bin\, whisper_models\, and assets\
-Source: "{#MyDistDir}\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#MyDistDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Grant users-modify on all files so in-place Auto-Update can replace AI_Movie_Dubbing_Studio.exe inside C:\Program Files without Access Denied
+Source: "{#MyDistDir}\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion; Permissions: users-modify
+Source: "{#MyDistDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Permissions: users-modify
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\assets\logo.ico"
