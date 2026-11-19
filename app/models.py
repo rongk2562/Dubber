@@ -45,6 +45,12 @@ class Segment:
     is_locked: bool = False      # True if locked by user against accidental overwrite
     tts_outdated: bool = False   # True if text changed after TTS generation
 
+    # Source text origin & OCR quality tracking
+    src_source: str = ""         # "OCR", "Whisper", "Manual"
+    ocr_confidence: float = 1.0  # OCR confidence (0.0 to 1.0)
+    whisper_cer: float = 0.0     # Character Error Rate vs Whisper (0.0 to 1.0)
+    needs_review: bool = False   # True if CER > 30% or low OCR confidence
+
     @property
     def speech_start(self) -> float:
         """Exact start timestamp of the spoken voice (seconds). Defaults to start."""
@@ -160,6 +166,10 @@ class ProjectSettings:
     result_video_path: str = ""     # Output path of the generated result video
     auto_check_updates: bool = True # Automatically check for updates on startup
     update_check_url: str = ""      # Custom update manifest URL (optional)
+    src_mode: str = "auto"          # "whisper", "ocr", "auto"
+    ocr_engine: str = "rapidocr"    # "rapidocr", "paddleocr"
+    ocr_fps: float = 5.0            # Frames per second to scan for hardcoded subtitles
+    use_ocr_timestamps: bool = True # Use OCR start/end timestamps (or snap to VAD)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

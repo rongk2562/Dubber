@@ -1,9 +1,9 @@
 {
-  "version": "1.3.0",
+  "version": "1.3.1",
   "app_name": "AI Movie Translator & Auto Dubbing Studio",
-  "release_date": "2026-11-18",
-  "download_url": "https://github.com/rongk2562/Dubber/releases/download/v1.3.0/AI_Movie_Dubbing_Studio.exe",
-  "changelog_km": "កំណែថ្មី v1.3.0:\n- 🔲 ផ្ទាំងសារ៉េបិទបាំងអក្សរចិនដើម (Subtitle Mask Band) អាចទាញ Mouse 2D, សារ៉េទីតាំង X/Y, កម្ពស់, ទទឹង និងកម្រិតងងឹត\n- 🎯 ចាក់សោតម្រឹមអក្សរខ្មែរចំកណ្ដាលប្រអប់ស្វ័យប្រវត្តិ (Auto-lock in Center) 1:1 Pixel-exact ជាមួយ FFmpeg PlayRes\n- 🔤 កែប្រែឈ្មោះតួអង្គចិន និងឡាតាំងទៅជាអក្សរខ្មែរជាប់លាប់ (Transliteration: Gang Hong -> គាំងហុង, Baoshou -> ប៉ោសូវ, Su Bao -> ស៊ូប៉ាវ...)\n- 🔇 បិទសំឡេងដើមទាំងស្រុង (Digital Silence < -80 dB) និងបំបែក Stem សំឡេងតួដើម, ភ្លេង BG និងសំឡេង AI ដាច់ពីគ្នា\n- 🤖 គាំទ្រការបកប្រែតាមរយៈ Gemini 1.5 Flash ជាមួយ Custom API Key\n- ⏱️ Speech Rate Budget & Text Condenser សម្រាប់ល្បឿននិយាយភាសាខ្មែរធម្មជាតិ (5-6 ព្យាង្គ/វិនាទី)",
-  "changelog_en": "Release v1.3.0:\n- 🔲 Interactive Subtitle Mask Band Dialog with 2D Drag, X/Y positioning, width, height & opacity\n- 🎯 Subtitle auto-lock inside mask band with 1:1 PlayResX/PlayResY exact pixel matching\n- 🔤 Consistent Khmer transliteration engine for character names (Gang Hong -> គាំងហុង, Baoshou -> ប៉ោសូវ, Su Bao -> ស៊ូប៉ាវ)\n- 🔇 True digital silence (< -80 dB) when original voice/background is muted, with 3 independent stems\n- 🤖 Gemini 1.5 Flash translation engine support with customizable API Key\n- ⏱️ Speech-rate budget & condensation for natural Khmer speaking speed (5-6 syl/s)",
+  "release_date": "2026-11-19",
+  "download_url": "https://github.com/rongk2562/Dubber/releases/download/v1.3.1/AI_Movie_Dubbing_Studio.exe",
+  "changelog_km": "កំណែថ្មី v1.3.1:\n- 👁️ បន្ថែមប្រភពអត្ថបទចិន Video OCR (RapidOCR / PaddleOCR / Auto hardsub detection) ជាមួយ OpenCC t2s និងការច្រោះ watermark ស្វ័យប្រវត្តិ\n- 📥 បន្ថែមមុខងារ Export SRT ចិន (ជាបំណែកៗ + Prompt ChatGPT) និង នាំចូល SRT ខ្មែរ ជាមួយតារាង Preview Diff, Merge/Split, និង Undo/Backup\n- 🎨 កែសម្រួលផ្ទាំង Preview Subtitle Mask & Position ឱ្យ update ទំហំអក្សរ (Font Size) និង Margin V ភ្លាមៗ (60fps WYSIWYG) ដោយប្រើពុម្ពអក្សរ Noto Sans Khmer ដែល bundle ជាមួយកម្មវិធី",
+  "changelog_en": "Release v1.3.1:\n- 👁️ Added Video Hardsub OCR source (RapidOCR / PaddleOCR / Auto detection) with OpenCC t2s, static watermark removal, and Whisper CER comparison\n- 📥 Added Export Chinese SRT (chunked + ChatGPT prompt) and Import Khmer SRT with Diff Preview, Merge/Split matching, and 1-step Undo/Backup\n- 🎨 Live 60fps WYSIWYG preview in Subtitle Mask & Position dialog with bundled Noto Sans Khmer font and real segment text wrapping",
   "mandatory": false
 }

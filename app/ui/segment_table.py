@@ -519,12 +519,28 @@ class SegmentTableWidget(QWidget):
             bg_color = "#881337" # Red
             fg_color = "#f43f5e"
 
-        item_status = QTableWidgetItem(label_text)
+        src_tag = getattr(seg, "src_source", "")
+        if src_tag == "Manual":
+            src_badge = "កែដោយដៃ"
+        elif src_tag in ("OCR", "Whisper"):
+            src_badge = src_tag
+        else:
+            src_badge = ""
+
+        if getattr(seg, "needs_review", False):
+            label_text = f"⚠️ {label_text}"
+            if bg_color == "#065f46":
+                bg_color = "#854d0e"
+                fg_color = "#fde047"
+
+        display_badge = f"{src_badge} | {label_text}" if src_badge else label_text
+        item_status = QTableWidgetItem(display_badge)
         item_status.setFlags(item_status.flags() & ~Qt.ItemFlag.ItemIsEditable)
         item_status.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
         item_status.setBackground(QColor(bg_color))
         item_status.setForeground(QColor(fg_color))
-        item_status.setToolTip(f"{syl} syllables / {dur:.2f}s = {syl_rate} syl/sec | Speed: {seg.speed:.2f}x | Status: {status}")
+        cer_info = f" | CER vs Whisper: {getattr(seg, 'whisper_cer', 0.0)*100:.0f}%" if getattr(seg, "whisper_cer", 0.0) > 0 else ""
+        item_status.setToolTip(f"Source: {src_badge or 'Auto'} | {syl} syl / {dur:.2f}s = {syl_rate}/s | Speed: {seg.speed:.2f}x{cer_info}")
         self.table.setItem(row, self.COL_STATUS, item_status)
 
     def _on_item_changed(self, item: QTableWidgetItem):
@@ -553,6 +569,7 @@ class SegmentTableWidget(QWidget):
                     slot_item.setText(f"{seg.slot:.2f}")
             elif col == self.COL_SRC:
                 seg.text_src = item.text()
+                seg.src_source = "Manual"
             elif col == self.COL_KM:
                 seg.text_km = item.text()
                 item.setForeground(QColor("#fef08a") if seg.text_km else QColor("#94a3b8"))

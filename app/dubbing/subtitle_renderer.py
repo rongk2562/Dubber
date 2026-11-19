@@ -177,7 +177,17 @@ class SubtitleRenderer:
             color_str = f"{mask_color}@{mask_opacity:.2f}"
             mask_filter = f"drawbox=x={x_expr}:y={y_expr}:w={w_expr}:h={h_expr}:color={color_str}:t=fill,"
 
-        base_chain = f"{mask_filter}subtitles='{norm_srt}':force_style='{style_expr}'"
+        fonts_part = ""
+        try:
+            from app.config import get_resource_path
+            fonts_dir = get_resource_path("assets/fonts")
+            if fonts_dir.exists() and fonts_dir.is_dir():
+                norm_fonts = str(fonts_dir).replace("\\", "/").replace(":", "\\:")
+                fonts_part = f":fontsdir='{norm_fonts}'"
+        except Exception:
+            fonts_part = ""
+
+        base_chain = f"{mask_filter}subtitles='{norm_srt}'{fonts_part}:force_style='{style_expr}'"
 
         # Step 3: Handle logo overlay if provided
         if logo_path and os.path.exists(logo_path):

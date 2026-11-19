@@ -10,20 +10,38 @@ Provides a live video frame preview where the user can visually adjust, drag, an
 import os
 import subprocess
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
 from PySide6.QtWidgets import (
     QDialog, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QSlider, QPushButton, QCheckBox, QGroupBox,
     QSpinBox, QScrollArea, QFrame, QMessageBox
 )
-from PySide6.QtCore import Qt, Signal, QRect, QPoint
+from PySide6.QtCore import Qt, Signal, QRect, QPoint, QTimer
 from PySide6.QtGui import (
-    QPainter, QColor, QPen, QBrush, QFont, QFontMetrics, QPixmap, QImage, QPainterPath
+    QPainter, QColor, QPen, QBrush, QFont, QFontMetrics, QFontDatabase,
+    QTextLayout, QTextOption, QPixmap, QImage, QPainterPath
 )
 
-from app.models import ProjectSettings
-from app.config import TEMP_DIR
+from app.models import ProjectSettings, Segment
+from app.config import TEMP_DIR, get_resource_path
+
+
+def _load_bundled_khmer_font() -> str:
+    """Load bundled Noto Sans Khmer TTF fonts via QFontDatabase so preview matches export."""
+    family = "Noto Sans Khmer"
+    try:
+        for rel_path in ("assets/fonts/NotoSansKhmer-Regular.ttf", "assets/fonts/NotoSansKhmer-Bold.ttf"):
+            fpath = get_resource_path(rel_path)
+            if fpath.exists():
+                fid = QFontDatabase.addApplicationFont(str(fpath))
+                if fid >= 0:
+                    fams = QFontDatabase.applicationFontFamilies(fid)
+                    if fams:
+                        family = fams[0]
+    except Exception as e:
+        print(f"[SubtitleMaskDialog] Font load warning: {e}")
+    return family
 
 
 class SubtitleMaskCanvas(QWidget):
@@ -55,9 +73,14 @@ class SubtitleMaskCanvas(QWidget):
 
         self.sample_khmer_text: str = "«គាំងហុង និង ប៉ោសូវ បានមកដល់ហើយ»"
         self.sample_chinese_text: str = "这是一条原版中文字幕 (Sample Chinese Subtitles)"
+        self.font_family: str = _load_bundled_khmer_font()
+        self.video_height: int = 720
+        self.last_wrapped_lines: int = 1
 
     def set_frame(self, pixmap: Optional[QPixmap]):
         self.frame_pixmap = pixmap
+        if pixmap and not pixmap.isNull():
+            self.video_height = max(1, pixmap.height())
         self.update()
 
     def update_params(
@@ -80,7 +103,7 @@ class SubtitleMaskCanvas(QWidget):
         self.mask_x_pct = max(0.0, min(max_x, x_pct))
         self.mask_opacity = max(0.1, min(1.0, opacity))
         self.font_size = max(10, min(48, font_size))
-        self.margin_v = max(0, min(150, margin_v))
+        self.margin_v = max(0, min(250, margin_v))
         self.mask_color = color
         self.update()
 
@@ -198,37 +221,72 @@ class SubtitleMaskCanvas(QWidget):
                 f"X: {self.mask_x_pct:.1f}% | Y: {self.mask_y_pct:.1f}%"
             )
 
-        # 3. Draw Sample Khmer Subtitle (Pixel-exact matching with FFmpeg/libass PlayRes)
-        sub_font_scaled = max(11, int(self.font_size * (v_rect.height() / 720.0)))
-        f_sub = QFont("Noto Sans Khmer")
-        f_sub.setPixelSize(sub_font_scaled)
+        # 3. Draw Sample Khmer Subtitle (WYSIWYG 1:1 matching with FFmpeg/libass PlayRes & word-wrapping)
+        vid_h = self.video_height if self.video_height > 0 else 720
+        scale = v_rect.height() / float(vid_h)
+        actual_fs = max(12, int(self.font_size * (vid_h / 720.0)))
+        actual_mv = int(self.margin_v * (vid_h / 720.0))
+
+        preview_font_px = max(4, round(actual_fs * scale))
+        preview_margin_v = actual_mv * scale
+
+        f_sub = QFont(self.font_family)
+        f_sub.setPixelSize(preview_font_px)
         f_sub.setBold(True)
         painter.setFont(f_sub)
-
-        # In ASS alignment 2 (bottom-center), MarginV is distance from video bottom to text bounding box bottom
-        scaled_margin = int(self.margin_v * (v_rect.height() / 720.0))
         fm = QFontMetrics(f_sub)
-        text = self.sample_khmer_text
-        text_w = fm.horizontalAdvance(text)
-        text_descent = fm.descent()
 
-        baseline_y = v_rect.bottom() - scaled_margin - text_descent
-
-        # Horizontal alignment inside mask band (or video center if full width)
+        # Horizontal alignment & wrap width matching MarginL / MarginR inside mask box
         if self.mask_enabled and self.mask_w_pct < 99.9:
             band_x = v_rect.left() + int(v_rect.width() * (self.mask_x_pct / 100.0))
             band_w = int(v_rect.width() * (self.mask_w_pct / 100.0))
-            center_x = band_x + (band_w // 2)
+            center_x = band_x + (band_w / 2.0)
+            wrap_width = max(40.0, float(band_w - 8))
         else:
-            center_x = v_rect.center().x()
+            center_x = float(v_rect.center().x())
+            wrap_width = max(40.0, float(v_rect.width() - 20))
 
-        text_x = center_x - (text_w // 2)
+        text = self.sample_khmer_text or "«គាំងហុង និង ប៉ោសូវ បានមកដល់ហើយ»"
+        text_layout = QTextLayout(text, f_sub)
+        t_opt = QTextOption(Qt.AlignmentFlag.AlignHCenter)
+        t_opt.setWrapMode(QTextOption.WrapMode.WordWrap)
+        text_layout.setTextOption(t_opt)
+        text_layout.beginLayout()
+        wrapped_lines = []
+        while True:
+            ln = text_layout.createLine()
+            if not ln.isValid():
+                break
+            ln.setLineWidth(wrap_width)
+            wrapped_lines.append(ln)
+        text_layout.endLayout()
+
+        self.last_wrapped_lines = max(1, len(wrapped_lines))
+        total_h = sum(ln.height() for ln in wrapped_lines)
+        block_top_y = v_rect.bottom() - preview_margin_v - total_h
 
         path = QPainterPath()
-        path.addText(text_x, baseline_y, f_sub, text)
+        cur_y = 0.0
+        for ln in wrapped_lines:
+            ln_txt = text[ln.textStart():ln.textStart() + ln.textLength()].strip()
+            if ln_txt:
+                ln_w = fm.horizontalAdvance(ln_txt)
+                ln_x = center_x - (ln_w / 2.0)
+                baseline_y = block_top_y + cur_y + ln.ascent()
+                path.addText(ln_x, baseline_y, f_sub, ln_txt)
+            cur_y += ln.height()
 
-        # Black outline
-        painter.setPen(QPen(QColor(0, 0, 0, 240), 3.5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+        # Shadow (matching ASS Shadow=1.0)
+        shadow_offset = max(0.8, 1.0 * (vid_h / 720.0) * scale)
+        shadow_path = QPainterPath(path)
+        shadow_path.translate(shadow_offset, shadow_offset)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(0, 0, 0, 170))
+        painter.drawPath(shadow_path)
+
+        # Black outline (matching ASS Outline=2.5)
+        outline_w = max(1.2, 2.5 * (vid_h / 720.0) * scale * 1.4)
+        painter.setPen(QPen(QColor(0, 0, 0, 240), outline_w, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawPath(path)
 
@@ -299,6 +357,7 @@ class SubtitleMaskDialog(QDialog):
         settings: ProjectSettings,
         video_path: str = "",
         current_time: float = 2.0,
+        segments: Optional[List[Segment]] = None,
         lang: str = "km",
         parent=None
     ):
@@ -306,7 +365,15 @@ class SubtitleMaskDialog(QDialog):
         self.settings = settings
         self.video_path = video_path
         self.current_time = max(0.5, current_time)
+        self.segments = segments or []
         self.lang = lang
+
+        # 16ms QTimer throttle for smooth 60fps preview updates without FFmpeg re-render
+        self._preview_timer = QTimer(self)
+        self._preview_timer.setSingleShot(True)
+        self._preview_timer.setInterval(16)
+        self._preview_timer.timeout.connect(self._flush_preview_update)
+        self._pending_preview_params: Optional[dict] = None
 
         title = "⚙️ សារ៉េទីតាំងផ្ទាំងបិទបាំងអក្សរចិនដើម (Subtitle Mask & Position)" if lang == "km" else "⚙️ Subtitle Mask & Positioning"
         self.setWindowTitle(title)
@@ -362,6 +429,7 @@ class SubtitleMaskDialog(QDialog):
         """)
 
         self._init_ui()
+        self._update_sample_text_for_time()
         self._load_current_frame()
         self._sync_ui_from_settings()
 
@@ -687,7 +755,7 @@ class SubtitleMaskDialog(QDialog):
         self.lbl_fs_val.setText(f"{fs} px")
         self.lbl_mb_val.setText(f"{mb} px")
 
-        self.canvas.update_params(
+        self._pending_preview_params = dict(
             enabled=enabled,
             y_pct=y_pct,
             h_pct=h_pct,
@@ -697,6 +765,16 @@ class SubtitleMaskDialog(QDialog):
             font_size=fs,
             margin_v=mb
         )
+        # Throttle canvas repaint at ~16ms (60fps) without calling FFmpeg
+        if not self._preview_timer.isActive():
+            self._flush_preview_update()
+            self._preview_timer.start()
+
+    def _flush_preview_update(self):
+        if self._pending_preview_params:
+            params = self._pending_preview_params
+            self._pending_preview_params = None
+            self.canvas.update_params(**params)
 
     def _sync_sliders_from_canvas(self):
         self.slider_y.blockSignals(True)
@@ -715,14 +793,16 @@ class SubtitleMaskDialog(QDialog):
         self._on_values_changed()
 
     def _auto_center_subtitle(self):
-        """Calculate optimal MarginV to center the Khmer text directly inside the mask band."""
+        """Calculate optimal MarginV to center the wrapped Khmer text directly inside the mask band."""
         self._auto_centering = True
         try:
             y_pct = self.slider_y.value() / 10.0
             h_pct = self.slider_h.value() / 10.0
             fs = self.slider_fs.value()
+            lines = max(1, getattr(self.canvas, "last_wrapped_lines", 1))
+            text_block_h = fs * 1.2 * lines
             center_from_bottom_pct = 100.0 - (y_pct + (h_pct / 2.0))
-            computed_margin = max(5, int((center_from_bottom_pct / 100.0) * 720.0 - (fs / 2.0)))
+            computed_margin = max(5, int((center_from_bottom_pct / 100.0) * 720.0 - (text_block_h / 2.0)))
             self.slider_mb.setValue(min(250, max(5, computed_margin)))
         finally:
             self._auto_centering = False
@@ -742,9 +822,30 @@ class SubtitleMaskDialog(QDialog):
             self.chk_lock_center.setChecked(True)
             self.chk_lock_center.blockSignals(False)
         self._auto_center_subtitle()
+        self._on_values_changed()
+
+    def _update_sample_text_for_time(self):
+        """Use real Khmer text of segment at current_time, or longest segment text."""
+        chosen = ""
+        if self.segments:
+            for seg in self.segments:
+                txt = (getattr(seg, "text_km", "") or "").strip()
+                if txt and seg.start <= self.current_time <= seg.end:
+                    chosen = txt
+                    break
+            if not chosen:
+                km_texts = [(getattr(seg, "text_km", "") or "").strip() for seg in self.segments]
+                km_texts = [t for t in km_texts if t]
+                if km_texts:
+                    chosen = max(km_texts, key=len)
+        if chosen:
+            self.canvas.sample_khmer_text = chosen
+        else:
+            self.canvas.sample_khmer_text = "«គាំងហុង និង ប៉ោសូវ បានមកដល់ហើយ»"
 
     def _seek_frame(self, delta: float):
         self.current_time = max(0.5, self.current_time + delta)
+        self._update_sample_text_for_time()
         self._load_current_frame()
 
     def _load_current_frame(self):

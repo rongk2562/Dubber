@@ -187,6 +187,12 @@ class MainWindow(QMainWindow):
         self.progress_bar.setVisible(False)
         self.status_bar.addPermanentWidget(self.progress_bar)
 
+        self.btn_cancel_task = QPushButton("✖ បោះបង់" if self.lang == "km" else "✖ Cancel")
+        self.btn_cancel_task.setStyleSheet("background-color: #991b1b; color: white; font-size: 11px; padding: 2px 8px; border-radius: 4px; font-weight: bold;")
+        self.btn_cancel_task.setVisible(False)
+        self.btn_cancel_task.clicked.connect(self._cancel_current_worker)
+        self.status_bar.addPermanentWidget(self.btn_cancel_task)
+
         self.lbl_stats = QLabel("0 Segments")
         self.lbl_stats.setStyleSheet("color: #94a3b8; font-size: 11px; margin-right: 12px;")
         self.status_bar.addPermanentWidget(self.lbl_stats)
@@ -283,9 +289,53 @@ class MainWindow(QMainWindow):
         self.act_import.setToolTip(s["btn_import_video"])
         toolbar.addSeparator()
 
-        # Step 1: Transcribe
-        self.act_transcribe = toolbar.addAction("🎙️ ១. Whisper" if self.lang == "km" else "🎙️ 1. Whisper", self._run_transcription)
+        # Step 1: Source Text Extraction (Whisper / OCR / Auto)
+        self.act_transcribe = toolbar.addAction("🎙️ ១. ស្ដាប់/OCR" if self.lang == "km" else "🎙️ 1. Extract", self._run_transcription)
         self.act_transcribe.setToolTip(s["btn_transcribe"])
+
+        self.cb_src_mode = QComboBox()
+        self.cb_src_mode.setMinimumWidth(165)
+        self.cb_src_mode.setToolTip("ប្រភពអត្ថបទចិន៖ Auto (OCR បើមាន hardsubs), OCR អក្សរក្នុងវិដេអូ, ឬ Whisper")
+        self.cb_src_mode.setStyleSheet("""
+            QComboBox {
+                background-color: #0f172a;
+                color: #34d399;
+                border: 1px solid #059669;
+                border-radius: 6px;
+                padding: 5px 10px;
+                font-weight: bold;
+                font-size: 11px;
+            }
+            QComboBox:hover { border-color: #6ee7b7; }
+        """)
+        self.cb_src_mode.addItem("🤖 Auto (OCR/Whisper)" if self.lang == "km" else "🤖 Auto (OCR/Whisper)", "auto")
+        self.cb_src_mode.addItem("👁️ OCR អក្សរក្នុងវិដេអូ" if self.lang == "km" else "👁️ Video OCR", "ocr")
+        self.cb_src_mode.addItem("🎙️ Whisper (សំឡេង)" if self.lang == "km" else "🎙️ Whisper (Audio)", "whisper")
+        cur_src_mode = getattr(self.project.settings, "src_mode", "auto") or "auto"
+        sm_idx = self.cb_src_mode.findData(cur_src_mode)
+        if sm_idx >= 0:
+            self.cb_src_mode.setCurrentIndex(sm_idx)
+        self.cb_src_mode.currentIndexChanged.connect(
+            lambda idx: setattr(self.project.settings, "src_mode", self.cb_src_mode.itemData(idx))
+        )
+        toolbar.addWidget(self.cb_src_mode)
+
+        self.btn_ocr_opts = QPushButton("⚙️ OCR")
+        self.btn_ocr_opts.setToolTip("កំណត់ Engine OCR (RapidOCR/PaddleOCR), FPS, ទទួលពេលវេលា OCR និងតំបន់ ROI")
+        self.btn_ocr_opts.setStyleSheet("""
+            QPushButton {
+                background-color: #1e293b;
+                color: #34d399;
+                border: 1px solid #059669;
+                border-radius: 6px;
+                padding: 5px 8px;
+                font-weight: bold;
+                font-size: 11px;
+            }
+            QPushButton:hover { background-color: #064e3b; }
+        """)
+        self.btn_ocr_opts.clicked.connect(self._open_ocr_options_menu)
+        toolbar.addWidget(self.btn_ocr_opts)
 
         # Target Language Selector (Multi-Language Translate & TTS Voice)
         self.cb_target_lang = QComboBox()
@@ -1072,11 +1122,104 @@ class MainWindow(QMainWindow):
             self._on_transcribe_finished
         )
 
+    def _open_ocr_options_menu(self):
+        from PySide6.QtWidgets import QDialog, QFormLayout, QComboBox, QDoubleSpinBox, QCheckBox, QDialogButtonBox
+        dlg = QDialog(self)
+        dlg.setWindowTitle("⚙️ ការកំណត់ OCR អក្សរក្នុងវិដេអូ (OCR Settings)")
+        dlg.resize(420, 260)
+        form = QFormLayout(dlg)
+
+        cb_eng = QComboBox()
+        cb_eng.addItem("RapidOCR (ONNX - Default / លឿន)", "rapidocr")
+        cb_eng.addItem("PaddleOCR (ជម្រើស)", "paddleocr")
+        cur_eng = getattr(self.project.settings, "ocr_engine", "rapidocr")
+        idx = cb_eng.findData(cur_eng)
+        if idx >= 0:
+            cb_eng.setCurrentIndex(idx)
+        form.addRow("OCR Engine:", cb_eng)
+
+        spin_fps = QDoubleSpinBox()
+        spin_fps.setRange(2.0, 10.0)
+        spin_fps.setSingleStep(1.0)
+        spin_fps.setValue(float(getattr(self.project.settings, "ocr_fps", 5.0)))
+        form.addRow("ល្បឿនស្កេន (FPS, 4–8):", spin_fps)
+
+        chk_ocr_ts = QCheckBox("ទទួលពេលវេលា OCR (Use OCR start/end timestamps)")
+        chk_ocr_ts.setChecked(bool(getattr(self.project.settings, "use_ocr_timestamps", True)))
+        form.addRow("", chk_ocr_ts)
+
+        btn_roi = QPushButton("📐 កែតំបន់ ROI (Subtitle Mask & Position)...")
+        btn_roi.clicked.connect(self._open_subtitle_mask_dialog)
+        form.addRow("តំបន់ស្កេន (ROI):", btn_roi)
+
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        btns.accepted.connect(dlg.accept)
+        btns.rejected.connect(dlg.reject)
+        form.addRow(btns)
+
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self.project.settings.ocr_engine = cb_eng.currentData()
+            self.project.settings.ocr_fps = spin_fps.value()
+            self.project.settings.use_ocr_timestamps = chk_ocr_ts.isChecked()
+            self._on_data_changed()
+
     def _worker_transcribe(self, progress_cb):
+        src_mode = getattr(self.project.settings, "src_mode", "auto") or "auto"
+        ocr_engine_name = getattr(self.project.settings, "ocr_engine", "rapidocr") or "rapidocr"
+        ocr_fps = float(getattr(self.project.settings, "ocr_fps", 5.0))
+        use_ocr_ts = bool(getattr(self.project.settings, "use_ocr_timestamps", True))
+
+        use_ocr = False
+        if src_mode == "ocr":
+            use_ocr = True
+        elif src_mode == "auto":
+            progress_cb(3, "កំពុងពិនិត្យមើលអក្សរចិនក្នុងវីដេអូ (Auto hardsub probe)...")
+            from app.dubbing.ocr_engine import SubtitleOcrEngine
+            probe_eng = SubtitleOcrEngine(engine_name=ocr_engine_name)
+            use_ocr = probe_eng.detect_hardcoded_subtitles(
+                self.project.video_path,
+                settings=self.project.settings
+            )
+
+        if use_ocr:
+            from app.dubbing.ocr_engine import SubtitleOcrEngine
+            ocr_eng = SubtitleOcrEngine(engine_name=ocr_engine_name)
+            existing_whisper = [
+                s for s in self.project.segments
+                if getattr(s, "src_source", "") in ("", "Whisper")
+            ]
+
+            segments, ocr_report = ocr_eng.scan_video(
+                video_path=self.project.video_path,
+                settings=self.project.settings,
+                fps=ocr_fps,
+                min_conf=0.6,
+                min_chars=2,
+                min_duration=0.3,
+                vad_segments=existing_whisper if existing_whisper else None,
+                use_ocr_timestamps=use_ocr_ts,
+                progress_cb=progress_cb,
+                cancel_cb=lambda: getattr(self, "_cancel_requested", False),
+            )
+
+            # Run AI repair ONLY on low-confidence OCR rows
+            low_conf_segs = [s for s in segments if getattr(s, "ocr_confidence", 1.0) < 0.80]
+            if low_conf_segs:
+                progress_cb(95, f"កំពុងជួសជុលជួរ OCR confidence ទាប ({len(low_conf_segs)} ជួរ)...")
+                try:
+                    from app.dubbing.asr_repair import ASRRepairEngine
+                    repair_eng = ASRRepairEngine(self.translation_engine)
+                    repair_eng.repair_segments(low_conf_segs)
+                except Exception as e:
+                    print(f"[OCR] Low-conf AI repair note: {e}")
+
+            return segments, ocr_report
+
+        # Standard Whisper Audio Transcription
         progress_cb(5, "Extracting audio with FFmpeg...")
         audio_path = self.audio_engine.extract_audio(self.project.video_path)
         self.project.audio_path = audio_path
-        
+
         progress_cb(15, f"Transcribing with faster-whisper ({self.project.settings.whisper_model})...")
         stt = STTEngine(model_size=self.project.settings.whisper_model)
         segments = stt.transcribe(
@@ -1084,9 +1227,16 @@ class MainWindow(QMainWindow):
             language=self.project.settings.source_language,
             progress_cb=progress_cb
         )
-        return segments
+        for seg in segments:
+            seg.src_source = "Whisper"
+        return segments, None
 
-    def _on_transcribe_finished(self, segments):
+    def _on_transcribe_finished(self, result):
+        if isinstance(result, tuple) and len(result) == 2:
+            segments, ocr_report = result
+        else:
+            segments, ocr_report = result, None
+
         t_lang = getattr(self.project.settings, "target_language", "km") or "km"
         male_v, female_v = get_voice_pair_for_lang(t_lang)
         for seg in segments:
@@ -1094,8 +1244,22 @@ class MainWindow(QMainWindow):
         self.project.segments = segments
         self.segment_table.populate(self.project)
         self._update_stats_display()
-        self.status_bar.showMessage(f"Transcribed {len(segments)} segments.")
-        QMessageBox.information(self, "Transcribe Complete", f"បានស្រង់យក {len(segments)} វគ្គដោយជោគជ័យ!")
+
+        if ocr_report is not None:
+            self.status_bar.showMessage(f"OCR complete: {ocr_report.total_segments} phrases extracted.")
+            report_msg = (
+                f"ស្កេន OCR ({ocr_report.engine_used}) បានបញ្ចប់ដោយជោគជ័យ!\n\n"
+                f"• ចំនួនឃ្លាសរុប: {ocr_report.total_segments}\n"
+                f"• ជួរ confidence ទាប (< 0.80): {ocr_report.low_conf_count}\n"
+                f"• ជួរខុសគ្នាខ្លាំងពី Whisper (CER > 30%): {ocr_report.whisper_mismatch_count}\n"
+                f"• Watermark/Logo ដែលបានច្រោះចេញ: {ocr_report.watermarks_filtered}"
+            )
+            if ocr_report.details:
+                report_msg += "\n\nជួរដែលគួរពិនិត្យ:\n" + "\n".join(ocr_report.details[:5])
+            QMessageBox.information(self, "របាយការណ៍ស្កេន OCR (OCR Scan Report)", report_msg)
+        else:
+            self.status_bar.showMessage(f"Transcribed {len(segments)} segments.")
+            QMessageBox.information(self, "Transcribe Complete", f"បានស្រង់យក {len(segments)} វគ្គដោយជោគជ័យ!")
 
     def _run_translation(self):
         if not self.project.segments:
@@ -1359,8 +1523,8 @@ class MainWindow(QMainWindow):
                 self.act_undo_srt.setEnabled(True)
             if hasattr(self, "act_redo_srt"):
                 self.act_redo_srt.setEnabled(False)
-            self.segment_table.set_project(self.project)
-            self._save_autosave()
+            self.segment_table.populate(self.project)
+            self._do_autosave()
             backup_msg = f"\nBackup: {dlg.backup_path}" if dlg.backup_path else ""
             QMessageBox.information(
                 self,
@@ -1381,8 +1545,8 @@ class MainWindow(QMainWindow):
             self.act_undo_srt.setEnabled(len(self._srt_undo_stack) > 0)
         if hasattr(self, "act_redo_srt"):
             self.act_redo_srt.setEnabled(True)
-        self.segment_table.set_project(self.project)
-        self._save_autosave()
+        self.segment_table.populate(self.project)
+        self._do_autosave()
         self.status_bar.showMessage("↩️ បានស្ដារអត្ថបទ និងសំឡេងដើមមុនពេលនាំចូល SRT វិញហើយ!", 5000)
 
     def _redo_srt_import(self):
@@ -1397,8 +1561,8 @@ class MainWindow(QMainWindow):
             self.act_undo_srt.setEnabled(True)
         if hasattr(self, "act_redo_srt"):
             self.act_redo_srt.setEnabled(len(self._srt_redo_stack) > 0)
-        self.segment_table.set_project(self.project)
-        self._save_autosave()
+        self.segment_table.populate(self.project)
+        self._do_autosave()
         self.status_bar.showMessage("↪️ បានអនុវត្តការនាំចូល SRT ឡើងវិញហើយ!", 5000)
 
     def _export_wav(self):
@@ -1524,6 +1688,7 @@ class MainWindow(QMainWindow):
             settings=self.project.settings,
             video_path=self.project.video_path,
             current_time=cur_time,
+            segments=self.project.segments,
             lang=self.lang,
             parent=self
         )
@@ -1613,8 +1778,11 @@ class MainWindow(QMainWindow):
             )
             return
 
+        self._cancel_requested = False
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
+        if hasattr(self, "btn_cancel_task"):
+            self.btn_cancel_task.setVisible(True)
         self.status_bar.showMessage(f"Starting {name}...")
 
         worker = PipelineWorker(name, task_fn)
@@ -1624,8 +1792,15 @@ class MainWindow(QMainWindow):
         self._current_worker = worker
         worker.start()
 
+    def _cancel_current_worker(self):
+        self._cancel_requested = True
+        if hasattr(self, "btn_cancel_task"):
+            self.btn_cancel_task.setVisible(False)
+        self.status_bar.showMessage("កំពុងបោះបង់ដំណើរការ...", 4000)
+
     def closeEvent(self, event):
         if hasattr(self, "_current_worker") and self._current_worker and self._current_worker.isRunning():
+            self._cancel_requested = True
             self.status_bar.showMessage("កំពុងរង់ចាំដំណើរការបញ្ចប់...")
             self._current_worker.wait(2000)
         event.accept()
@@ -1636,12 +1811,19 @@ class MainWindow(QMainWindow):
 
     def _on_worker_success(self, res, on_success_callback):
         self.progress_bar.setVisible(False)
+        if hasattr(self, "btn_cancel_task"):
+            self.btn_cancel_task.setVisible(False)
         self.status_bar.showMessage("Ready")
         on_success_callback(res)
         self._on_data_changed()
 
     def _on_worker_error(self, err_msg: str):
         self.progress_bar.setVisible(False)
+        if hasattr(self, "btn_cancel_task"):
+            self.btn_cancel_task.setVisible(False)
+        if "cancelled" in err_msg.lower():
+            self.status_bar.showMessage("បានបោះបង់ដំណើរការ។", 5000)
+            return
         self.status_bar.showMessage(f"Error: {err_msg[:40]}")
         QMessageBox.critical(self, "Processing Error", f"ដំណើរការមានបញ្ហា៖\n{err_msg}")
 

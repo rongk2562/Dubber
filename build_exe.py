@@ -156,6 +156,8 @@ def build():
         "--collect-all", "tokenizers",
         "--collect-all", "huggingface_hub",
         "--collect-all", "google.generativeai",
+        "--collect-all", "rapidocr_onnxruntime",
+        "--collect-all", "opencc",
         "--hidden-import", "PySide6.QtMultimedia",
         "--hidden-import", "PySide6.QtMultimediaWidgets",
         "--hidden-import", "PySide6.QtNetwork",

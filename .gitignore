@@ -11,6 +11,7 @@ dist/
 temp/
 data/*.db
 data/*.json
+data/backups/
 projects/*.aidub
 projects/*.json
 *.mp4
