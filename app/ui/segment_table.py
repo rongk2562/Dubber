@@ -10,7 +10,7 @@ from typing import List, Optional, Callable
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
     QPushButton, QHeaderView, QComboBox, QLineEdit, QLabel, QMessageBox,
-    QAbstractItemView, QDoubleSpinBox, QMenu, QSizePolicy
+    QAbstractItemView, QDoubleSpinBox, QMenu, QSizePolicy, QFrame, QStackedWidget
 )
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QFont
@@ -27,6 +27,7 @@ class SegmentTableWidget(QWidget):
     preview_tts_requested = Signal(Segment)
     segment_speed_changed = Signal(object, float) # seg, new_speed
     data_changed = Signal()
+    generate_tts_requested = Signal()
 
     COL_ID = 0
     COL_START = 1
@@ -48,166 +49,111 @@ class SegmentTableWidget(QWidget):
         self._is_populating = False
         self._init_ui()
 
+    def _make_vsep(self) -> QFrame:
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.VLine)
+        sep.setStyleSheet("color: #243350;")
+        return sep
+
     def _init_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
 
-        # Toolbar above table — Equal-sized boxes with zero overlap
+        # Row 0: Engine Controls Container (2 clean non-overlapping rows: Engines + SRT)
+        self.engine_bar = QVBoxLayout()
+        self.engine_bar.setContentsMargins(0, 0, 0, 0)
+        self.engine_bar.setSpacing(6)
+        layout.addLayout(self.engine_bar)
+
+        # Row 1: Grouped Action Toolbar (Edit | Speed | Danger | Single Accent CTA)
         top_bar = QHBoxLayout()
         top_bar.setContentsMargins(0, 0, 0, 0)
         top_bar.setSpacing(6)
 
-        btn_base_qss = """
-            QPushButton {
-                background-color: #1e293b;
-                color: #f8fafc;
-                border: 1px solid #475569;
-                border-radius: 6px;
-                padding: 4px 8px;
-                font-weight: bold;
-                font-size: 12px;
-            }
-            QPushButton:hover {
-                background-color: #334155;
-                border-color: #64748b;
-            }
-        """
-
-        self.btn_add = QPushButton("➕ បន្ថែម")
-        self.btn_add.setToolTip("បន្ថែមវគ្គថ្មី (Add Segment)")
-        self.btn_add.setStyleSheet(btn_base_qss)
+        # Group 1: Edit
+        self.btn_add = QPushButton("➕")
+        self.btn_add.setToolTip("បន្ថែមវគ្គថ្មី" if self.lang == "km" else "Add Segment")
         self.btn_add.clicked.connect(self._add_segment)
-        top_bar.addWidget(self.btn_add, 1)
+        top_bar.addWidget(self.btn_add)
 
-        self.btn_split = QPushButton("✂️ ពុះ")
-        self.btn_split.setToolTip("ពុះវគ្គដែលបានជ្រើស (Split Selected)")
-        self.btn_split.setStyleSheet(btn_base_qss)
+        self.btn_split = QPushButton("✂️")
+        self.btn_split.setToolTip("កាត់ពុះវគ្គ" if self.lang == "km" else "Split Segment")
         self.btn_split.clicked.connect(self._split_selected)
-        top_bar.addWidget(self.btn_split, 1)
+        top_bar.addWidget(self.btn_split)
 
-        self.btn_merge = QPushButton("🔗 បញ្ចូល")
-        self.btn_merge.setToolTip("បញ្ចូលវគ្គដែលបានជ្រើស (Merge Selected)")
-        self.btn_merge.setStyleSheet(btn_base_qss)
+        self.btn_merge = QPushButton("🔗")
+        self.btn_merge.setToolTip("បញ្ចូលវគ្គជាប់គ្នា" if self.lang == "km" else "Merge Segments")
         self.btn_merge.clicked.connect(self._merge_selected)
-        top_bar.addWidget(self.btn_merge, 1)
+        top_bar.addWidget(self.btn_merge)
 
-        self.btn_delete = QPushButton("🗑️ លុប")
-        self.btn_delete.setToolTip("លុបវគ្គដែលបានជ្រើស (Delete Selected)")
-        self.btn_delete.setStyleSheet("""
-            QPushButton {
-                background-color: #1e293b;
-                color: #f87171;
-                border: 1px solid #475569;
-                border-radius: 6px;
-                padding: 4px 8px;
-                font-weight: bold;
-                font-size: 12px;
-            }
-            QPushButton:hover {
-                background-color: #334155;
-                border-color: #ef4444;
-            }
-        """)
-        self.btn_delete.clicked.connect(self._delete_selected)
-        top_bar.addWidget(self.btn_delete, 1)
-
-        self.btn_clear = QPushButton("🧹 សម្អាត")
-        self.btn_clear.setToolTip("សម្អាតអត្ថបទបកប្រែ សំឡេង AI ឬសម្អាតតារាងទាំងមូល (Clear Translations / Voices / All)")
-        self.btn_clear.setStyleSheet("""
-            QPushButton {
-                background-color: #7f1d1d;
-                color: #fecaca;
-                border: 1px solid #ef4444;
-                border-radius: 6px;
-                padding: 4px 8px;
-                font-weight: bold;
-                font-size: 12px;
-            }
-            QPushButton:hover {
-                background-color: #991b1b;
-            }
-        """)
-        self.btn_clear.clicked.connect(self._show_clear_menu)
-        top_bar.addWidget(self.btn_clear, 1)
-
-        self.btn_auto_gender = QPushButton("🎭 ស្មានសំឡេង")
-        self.btn_auto_gender.setVisible(False) # Single Male Voice mode only
-
-        self.btn_humanize = QPushButton("✨ សម្ដីរស់រវើក")
-        self.btn_humanize.setStyleSheet("""
-            QPushButton {
-                background-color: #0d9488;
-                color: white;
-                border: 1px solid #14b8a6;
-                border-radius: 6px;
-                padding: 4px 8px;
-                font-weight: bold;
-                font-size: 12px;
-            }
-            QPushButton:hover {
-                background-color: #0f766e;
-            }
-        """)
-        self.btn_humanize.setToolTip("កែសម្រួលអត្ថបទឱ្យក្លាយជាសម្ដីនិយាយបែបភាពយន្តរស់រវើក និងបន្ថែមសញ្ញាអារម្មណ៍ (? / !)")
+        self.btn_humanize = QPushButton("✨")
+        self.btn_humanize.setToolTip("កែសម្ដីនិយាយឱ្យរស់រវើក" if self.lang == "km" else "Naturalize Dialogue")
         self.btn_humanize.clicked.connect(self._humanize_dialogue)
-        top_bar.addWidget(self.btn_humanize, 1)
+        top_bar.addWidget(self.btn_humanize)
 
-        # Quick Batch Speed Controls
-        self.lbl_batch_spd = QLabel("⚡ ល្បឿន:")
-        self.lbl_batch_spd.setVisible(False) # Keep attribute for compatibility while saving horizontal space
+        self.btn_auto_gender = QPushButton("🎭")
+        self.btn_auto_gender.setVisible(False)
+
+        top_bar.addWidget(self._make_vsep())
+
+        # Group 2: Speed
+        self.lbl_batch_spd = QLabel("⚡")
+        self.lbl_batch_spd.setVisible(False)
 
         self.cb_batch_speed = QComboBox()
-        self.cb_batch_speed.setToolTip("ជ្រើសរើសល្បឿនសំឡេង AI (Select AI Voice Speed)")
-        self.cb_batch_speed.setStyleSheet("""
-            QComboBox {
-                background-color: #1e293b;
-                color: #38bdf8;
-                border: 1px solid #475569;
-                border-radius: 6px;
-                padding: 4px 8px;
-                font-weight: bold;
-                font-size: 12px;
-            }
-            QComboBox:hover {
-                border-color: #38bdf8;
-            }
-        """)
+        self.cb_batch_speed.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        self.cb_batch_speed.setToolTip("ជ្រើសល្បឿនសំឡេង AI" if self.lang == "km" else "Select AI Voice Speed")
         for spd_val in [0.80, 0.90, 1.00, 1.05, 1.10, 1.15, 1.20, 1.25, 1.30, 1.40, 1.50]:
-            self.cb_batch_speed.addItem(f"⚡ {spd_val:.2f}x", spd_val)
-        self.cb_batch_speed.setCurrentIndex(3) # Default 1.05x
-        top_bar.addWidget(self.cb_batch_speed, 1)
+            self.cb_batch_speed.addItem(f"{spd_val:.2f}x", spd_val)
+        self.cb_batch_speed.setCurrentIndex(3)
+        self.cb_batch_speed.setMinimumWidth(86)
+        top_bar.addWidget(self.cb_batch_speed)
 
-        self.btn_batch_speed = QPushButton("⚡ " + ("ដាក់ល្បឿន" if self.lang == "km" else "Set Speed"))
-        self.btn_batch_speed.setStyleSheet("""
-            QPushButton {
-                background-color: #0284c7;
-                color: white;
-                border: 1px solid #38bdf8;
-                border-radius: 6px;
-                padding: 4px 8px;
-                font-weight: bold;
-                font-size: 12px;
-            }
-            QPushButton:hover {
-                background-color: #0369a1;
-            }
-        """)
-        self.btn_batch_speed.setToolTip("កំណត់ល្បឿននេះទៅកាន់វគ្គដែលបានជ្រើសរើស (ឬគ្រប់វគ្គទាំងអស់បើមិនបានជ្រើស) (Set speed for selected or all segments)")
+        self.btn_batch_speed = QPushButton("⚡ ដាក់ល្បឿន" if self.lang == "km" else "⚡ Apply Speed")
+        self.btn_batch_speed.setToolTip("អនុវត្តល្បឿនទៅវគ្គដែលបានជ្រើស ឬទាំងអស់" if self.lang == "km" else "Apply speed to selected or all segments")
         self.btn_batch_speed.clicked.connect(self._apply_batch_speed)
-        top_bar.addWidget(self.btn_batch_speed, 1)
+        top_bar.addWidget(self.btn_batch_speed)
 
-        # Search / filter (Hidden per user preference)
+        top_bar.addWidget(self._make_vsep())
+
+        # Group 3: Danger (Soft Red, separated)
+        self.btn_delete = QPushButton("🗑️")
+        self.btn_delete.setProperty("variant", "danger")
+        self.btn_delete.setToolTip("លុបវគ្គដែលបានជ្រើស" if self.lang == "km" else "Delete Selected")
+        self.btn_delete.clicked.connect(self._delete_selected)
+        top_bar.addWidget(self.btn_delete)
+
+        self.btn_clear = QPushButton("🧹 សម្អាត" if self.lang == "km" else "🧹 Clear")
+        self.btn_clear.setProperty("variant", "danger")
+        self.btn_clear.setToolTip("សម្អាតអត្ថបទ សំឡេង AI ឬតារាងទាំងមូល" if self.lang == "km" else "Clear Translations / Voices / All")
+        self.btn_clear.clicked.connect(self._show_clear_menu)
+        top_bar.addWidget(self.btn_clear)
+
+        self.btn_more_actions = QPushButton("⋯")
+        self.btn_more_actions.setToolTip("សកម្មភាពបន្ថែម (More Actions)" if self.lang == "km" else "More Actions")
+        self.btn_more_actions.clicked.connect(self._show_overflow_actions_menu)
+        self.btn_more_actions.setVisible(False)
+        top_bar.addWidget(self.btn_more_actions)
+
+        top_bar.addStretch()
+
+        # Single Accent CTA
+        self.btn_gen_tts = QPushButton("🗣️ បង្កើតសំឡេង" if self.lang == "km" else "🗣️ Generate Voices")
+        self.btn_gen_tts.setProperty("variant", "primary")
+        self.btn_gen_tts.setToolTip("បង្កើតសំឡេង AI សម្រាប់វគ្គទាំងអស់" if self.lang == "km" else "Generate AI voices for segments")
+        self.btn_gen_tts.clicked.connect(self.generate_tts_requested.emit)
+        top_bar.addWidget(self.btn_gen_tts)
+
         self.txt_filter = QLineEdit()
         self.txt_filter.setVisible(False)
 
-        # Enforce uniform 34px height and equal expanding policy across all 8 active boxes
         for w in [
-            self.btn_add, self.btn_split, self.btn_merge, self.btn_delete,
-            self.btn_clear, self.btn_humanize, self.cb_batch_speed, self.btn_batch_speed
+            self.btn_add, self.btn_split, self.btn_merge, self.btn_humanize,
+            self.cb_batch_speed, self.btn_batch_speed, self.btn_delete, self.btn_clear,
+            self.btn_more_actions, self.btn_gen_tts
         ]:
-            w.setFixedHeight(34)
-            w.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            w.setMinimumHeight(28)
 
         layout.addLayout(top_bar)
 
@@ -223,59 +169,83 @@ class SegmentTableWidget(QWidget):
         # Set Column Headers
         self.update_headers()
 
-        # Resize modes & Scrollbars
+        # Resize modes & Scrollbars: Text columns Stretch, numeric/meta columns ResizeToContents
         self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         header = self.table.horizontalHeader()
         header.setStretchLastSection(False)
         header.setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)
         header.setHighlightSections(False)
+        header.setMinimumSectionSize(42)
 
-        # Balanced column widths so all 12 columns fit 100% inside the table viewport without clipping 'សកម្មភាព'
-        self._col_widths = {
-            self.COL_ID: 32,
-            self.COL_START: 58,
-            self.COL_END: 52,
-            self.COL_SLOT: 48,
-            self.COL_SPEAKER: 48,
-            self.COL_SRC: 130,
-            self.COL_KM: 130,
-            self.COL_VOICE: 86,
-            self.COL_TTS_DUR: 58,
-            self.COL_SPEED: 58,
-            self.COL_STATUS: 70,
-            self.COL_ACTIONS: 74,
-        }
-        for col, width in self._col_widths.items():
-            header.setSectionResizeMode(col, QHeaderView.ResizeMode.Interactive)
-            self.table.setColumnWidth(col, width)
+        for col in range(12):
+            if col in (self.COL_SRC, self.COL_KM):
+                header.setSectionResizeMode(col, QHeaderView.ResizeMode.Stretch)
+            else:
+                header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
 
         self.table.itemChanged.connect(self._on_item_changed)
         self.table.itemSelectionChanged.connect(self._on_selection_changed)
 
-        layout.addWidget(self.table)
+        # Empty State 3-Step Guide
+        self.empty_guide = QFrame()
+        self.empty_guide.setProperty("class", "card")
+        self.empty_guide.setStyleSheet("QFrame { background-color: #162036; border: 1px dashed #243350; border-radius: 8px; }")
+        eg_lay = QVBoxLayout(self.empty_guide)
+        eg_lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        eg_lay.setSpacing(14)
 
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self._adjust_column_widths()
+        self.lbl_guide_title = QLabel("ចាប់ផ្ដើមបកប្រែ និងបញ្ចូលសំឡេងក្នុង ៣ ជំហានងាយៗ" if self.lang == "km" else "Get Started in 3 Simple Steps")
+        self.lbl_guide_title.setStyleSheet("font-size: 12pt; font-weight: bold; color: #E6ECF8; border: none;")
+        self.lbl_guide_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        eg_lay.addWidget(self.lbl_guide_title)
 
-    def _adjust_column_widths(self):
-        """Dynamically distribute extra viewport space to text columns while preserving full visibility of 'សកម្មភាព'."""
-        try:
-            total_w = self.table.viewport().width()
-            if total_w <= 100:
-                return
-            fixed_sum = sum(w for col, w in self._col_widths.items() if col not in (self.COL_SRC, self.COL_KM))
-            avail_for_text = max(160, total_w - fixed_sum - 4)
-            half_w = avail_for_text // 2
-            for col, width in self._col_widths.items():
-                if col == self.COL_SRC:
-                    self.table.setColumnWidth(col, half_w)
-                elif col == self.COL_KM:
-                    self.table.setColumnWidth(col, avail_for_text - half_w)
-                else:
-                    self.table.setColumnWidth(col, width)
-        except Exception:
-            pass
+        self.lbl_guide_steps = QLabel(
+            "① នាំចូលវីដេអូចូលក្នុងផ្ទាំងខាងឆ្វេង\n"
+            "② ចុច «អត្ថបទចិន» ដើម្បីស្រង់ឃ្លាចេញពី OCR ឬ Whisper\n"
+            "③ ចុច «បកប្រែ» រួចចុច «🗣️ បង្កើតសំឡេង» និង Export!"
+            if self.lang == "km" else
+            "① Drop or import a video on the left\n"
+            "② Extract Chinese text via OCR or Whisper\n"
+            "③ Translate, generate AI voices, preview, and export!"
+        )
+        self.lbl_guide_steps.setStyleSheet("font-size: 9.75pt; color: #9AA8C4; line-height: 1.6; border: none;")
+        self.lbl_guide_steps.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        eg_lay.addWidget(self.lbl_guide_steps)
+
+        self.table_stack = QStackedWidget()
+        self.table_stack.addWidget(self.empty_guide)  # index 0
+        self.table_stack.addWidget(self.table)        # index 1
+        layout.addWidget(self.table_stack)
+
+    def _show_overflow_actions_menu(self):
+        menu = QMenu(self)
+        menu.addAction("➕ " + ("បន្ថែមវគ្គថ្មី" if self.lang == "km" else "Add Segment"), self._add_segment)
+        menu.addAction("✂️ " + ("កាត់ពុះវគ្គ" if self.lang == "km" else "Split Segment"), self._split_selected)
+        menu.addAction("🔗 " + ("បញ្ចូលវគ្គជាប់គ្នា" if self.lang == "km" else "Merge Segments"), self._merge_selected)
+        menu.addAction("✨ " + ("កែសម្ដីនិយាយឱ្យរស់រវើក" if self.lang == "km" else "Naturalize Dialogue"), self._humanize_dialogue)
+        menu.addSeparator()
+        menu.addAction("⚡ " + ("ដាក់ល្បឿនគ្រប់វគ្គ" if self.lang == "km" else "Apply Speed"), self._apply_batch_speed)
+        menu.addAction("🗑️ " + ("លុបវគ្គដែលបានជ្រើស" if self.lang == "km" else "Delete Selected"), self._delete_selected)
+        menu.addAction("🧹 " + ("សម្អាត..." if self.lang == "km" else "Clear..."), self._show_clear_menu)
+        menu.exec(self.btn_more_actions.mapToGlobal(self.btn_more_actions.rect().bottomLeft()))
+
+    def _update_responsive_bars(self):
+        w = self.width()
+        win_w = self.window().width() if self.window() else w
+        compact = (w > 0 and w < 720) or (win_w > 0 and win_w < 1280)
+        very_tight = (w > 0 and w < 540)
+
+        if hasattr(self, "btn_batch_speed"):
+            self.btn_batch_speed.setText("⚡" if compact else ("⚡ ដាក់ល្បឿន" if self.lang == "km" else "⚡ Apply Speed"))
+        if hasattr(self, "btn_clear"):
+            self.btn_clear.setText("🧹" if compact else ("🧹 សម្អាត" if self.lang == "km" else "🧹 Clear"))
+        if hasattr(self, "btn_gen_tts"):
+            self.btn_gen_tts.setText("🗣️ AI" if compact else ("🗣️ បង្កើតសំឡេង" if self.lang == "km" else "🗣️ Generate Voices"))
+
+        for extra_btn in (self.btn_split, self.btn_merge, self.btn_humanize, self.btn_delete, self.btn_clear):
+            extra_btn.setVisible(not very_tight)
+        if hasattr(self, "btn_more_actions"):
+            self.btn_more_actions.setVisible(very_tight)
 
     def set_language(self, lang: str):
         self.lang = lang
@@ -310,33 +280,43 @@ class SegmentTableWidget(QWidget):
 
     def update_button_texts(self):
         if self.lang == "km":
-            self.btn_add.setText("➕ បន្ថែម")
-            self.btn_split.setText("✂️ ពុះ")
-            self.btn_merge.setText("🔗 បញ្ចូល")
-            self.btn_delete.setText("🗑️ លុប")
+            self.btn_add.setToolTip("បន្ថែមវគ្គថ្មី")
+            self.btn_split.setToolTip("កាត់ពុះវគ្គ")
+            self.btn_merge.setToolTip("បញ្ចូលវគ្គជាប់គ្នា")
+            self.btn_delete.setToolTip("លុបវគ្គដែលបានជ្រើស")
             self.btn_clear.setText("🧹 សម្អាត")
-            self.btn_auto_gender.setText("🎭 ស្មានសំឡេង")
-            self.btn_humanize.setText("✨ សម្ដីរស់រវើក")
-            self.lbl_batch_spd.setText("⚡ ល្បឿន:")
+            self.btn_humanize.setToolTip("កែសម្ដីនិយាយឱ្យរស់រវើក")
             self.btn_batch_speed.setText("⚡ ដាក់ល្បឿន")
-            self.txt_filter.setPlaceholderText("🔍 ស្វែងរក...")
+            self.btn_gen_tts.setText("🗣️ បង្កើតសំឡេង")
+            self.lbl_guide_title.setText("ចាប់ផ្ដើមបកប្រែ និងបញ្ចូលសំឡេងក្នុង ៣ ជំហានងាយៗ")
+            self.lbl_guide_steps.setText(
+                "① នាំចូលវីដេអូចូលក្នុងផ្ទាំងខាងឆ្វេង\n"
+                "② ចុច «អត្ថបទចិន» ដើម្បីស្រង់ឃ្លាចេញពី OCR ឬ Whisper\n"
+                "③ ចុច «បកប្រែ» រួចចុច «🗣️ បង្កើតសំឡេង» និង Export!"
+            )
         else:
-            self.btn_add.setText("➕ Add")
-            self.btn_split.setText("✂️ Split")
-            self.btn_merge.setText("🔗 Merge")
-            self.btn_delete.setText("🗑️ Delete")
+            self.btn_add.setToolTip("Add Segment")
+            self.btn_split.setToolTip("Split Selected Segment")
+            self.btn_merge.setToolTip("Merge Selected Segments")
+            self.btn_delete.setToolTip("Delete Selected")
             self.btn_clear.setText("🧹 Clear")
-            self.btn_auto_gender.setText("🎭 Auto Voices")
-            self.btn_humanize.setText("✨ Humanize")
-            self.lbl_batch_spd.setText("⚡ Speed:")
-            self.btn_batch_speed.setText("⚡ Set Speed")
-            self.txt_filter.setPlaceholderText("🔍 Search...")
+            self.btn_humanize.setToolTip("Naturalize Dialogue")
+            self.btn_batch_speed.setText("⚡ Apply Speed")
+            self.btn_gen_tts.setText("🗣️ Generate Voices")
+            self.lbl_guide_title.setText("Get Started in 3 Simple Steps")
+            self.lbl_guide_steps.setText(
+                "① Drop or import a video on the left\n"
+                "② Extract Chinese text via OCR or Whisper\n"
+                "③ Translate, generate AI voices, preview, and export!"
+            )
 
     def populate(self, project: Project):
         self._is_populating = True
         self.project = project
         self.update_headers()
         self.table.setRowCount(0)
+        if hasattr(self, "table_stack"):
+            self.table_stack.setCurrentIndex(1 if project.segments else 0)
 
         for row, seg in enumerate(project.segments):
             self.table.insertRow(row)
@@ -395,7 +375,7 @@ class SegmentTableWidget(QWidget):
             btn_lbl = f"👨 ប្រុស ({actor_name})" if self.lang == "km" else f"👨 Male ({actor_name})"
             lbl_voice = QLabel(btn_lbl)
             lbl_voice.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            lbl_voice.setStyleSheet("background-color: #0c4a6e; color: #38bdf8; font-weight: bold; font-size: 11px; border-radius: 4px; padding: 2px 3px;")
+            lbl_voice.setStyleSheet("background-color: #0c4a6e; color: #38bdf8; font-weight: bold; font-size: 8.5pt; border-radius: 4px; padding: 2px 4px;")
             self.table.setCellWidget(row, self.COL_VOICE, lbl_voice)
 
             # 8: TTS Duration
@@ -420,7 +400,7 @@ class SegmentTableWidget(QWidget):
                     border: 1px solid #334155;
                     border-radius: 4px;
                     padding: 1px 0px;
-                    font-size: 11px;
+                    font-size: 8.5pt;
                 }
                 QDoubleSpinBox:hover {
                     border-color: #0284c7;
@@ -444,8 +424,8 @@ class SegmentTableWidget(QWidget):
 
             btn_style = """
                 QPushButton {
-                    padding: 0px;
-                    font-size: 11px;
+                    padding: 2px 6px;
+                    font-size: 8.5pt;
                     border-radius: 4px;
                     background-color: #1e293b;
                     border: 1px solid #334155;
@@ -458,7 +438,7 @@ class SegmentTableWidget(QWidget):
 
             btn_play = QPushButton("▶")
             btn_play.setToolTip("Play video segment" if self.lang == "en" else "ចាក់វគ្គនេះក្នុងវីដេអូ")
-            btn_play.setFixedSize(28, 24)
+            btn_play.setMinimumSize(26, 22)
             btn_play.setStyleSheet(btn_style)
             btn_play.clicked.connect(
                 lambda checked, s=seg: self.play_segment_requested.emit(
@@ -470,7 +450,7 @@ class SegmentTableWidget(QWidget):
 
             btn_tts = QPushButton("🔊")
             btn_tts.setToolTip("Preview Khmer voice" if self.lang == "en" else "ស្ដាប់សំឡេង AI ខ្មែរ")
-            btn_tts.setFixedSize(28, 24)
+            btn_tts.setMinimumSize(26, 22)
             btn_tts.setStyleSheet(btn_style)
             btn_tts.clicked.connect(lambda checked, s=seg: self.preview_tts_requested.emit(s))
             act_layout.addWidget(btn_tts)
@@ -478,7 +458,7 @@ class SegmentTableWidget(QWidget):
             self.table.setCellWidget(row, self.COL_ACTIONS, action_widget)
 
         self._is_populating = False
-        self._adjust_text_columns()
+        self._update_responsive_bars()
 
     def _update_status_cell(self, row: int, seg: Segment):
         """Render colored badge based on SRS Time-sync rules & speech-rate QA gate."""
@@ -952,33 +932,9 @@ class SegmentTableWidget(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self._adjust_text_columns()
+        self._update_responsive_bars()
 
     def showEvent(self, event):
         super().showEvent(event)
-        self._adjust_text_columns()
-
-    def _adjust_text_columns(self):
-        """Dynamically allocate remaining table width to text columns so all 12 columns fit flush inside the viewport."""
-        if not hasattr(self, "table") or not hasattr(self, "_col_widths"):
-            return
-        fixed_cols = [
-            self.COL_ID, self.COL_START, self.COL_END, self.COL_SLOT,
-            self.COL_SPEAKER, self.COL_VOICE, self.COL_TTS_DUR,
-            self.COL_SPEED, self.COL_STATUS, self.COL_ACTIONS
-        ]
-        fixed_total = sum(self.table.columnWidth(c) for c in fixed_cols if not self.table.isColumnHidden(c))
-        viewport_w = self.table.viewport().width()
-        available = viewport_w - fixed_total - 2
-
-        if available >= 160:
-            src_w = available // 2
-            km_w = available - src_w
-            self.table.setColumnWidth(self.COL_SRC, src_w)
-            self.table.setColumnWidth(self.COL_KM, km_w)
-        else:
-            min_src = self._col_widths.get(self.COL_SRC, 120)
-            min_km = self._col_widths.get(self.COL_KM, 120)
-            self.table.setColumnWidth(self.COL_SRC, min_src)
-            self.table.setColumnWidth(self.COL_KM, min_km)
+        self._update_responsive_bars()
 

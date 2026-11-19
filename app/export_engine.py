@@ -156,6 +156,10 @@ class ExportEngine:
                 mask_x_pct=getattr(project.settings, "mask_x_percent", 0.0),
                 mask_opacity=getattr(project.settings, "mask_opacity", 0.95),
                 mask_color=getattr(project.settings, "mask_color", "black"),
+                mask_style=getattr(project.settings, "mask_style", "solid"),
+                blur_strength=getattr(project.settings, "mask_blur_strength", 40),
+                blur_dim=getattr(project.settings, "mask_blur_dim", 25),
+                mask_feather=getattr(project.settings, "mask_feather", False),
                 subtitle_margin_v=getattr(project.settings, "subtitle_margin_v", 25),
                 video_w=vid_w,
                 video_h=vid_h,
@@ -164,7 +168,11 @@ class ExportEngine:
                 logo_w=project.settings.logo_width,
                 logo_opacity=project.settings.logo_opacity,
                 logo_margin_x=project.settings.logo_margin_x,
-                logo_margin_y=project.settings.logo_margin_y
+                logo_margin_y=project.settings.logo_margin_y,
+                logo_width_pct=getattr(project.settings, "logo_width_pct", 12.0),
+                logo_margin_pct=getattr(project.settings, "logo_margin_pct", 2.5),
+                logo_custom_x_pct=getattr(project.settings, "logo_custom_x_pct", -1.0),
+                logo_custom_y_pct=getattr(project.settings, "logo_custom_y_pct", -1.0),
             )
 
             cmd = [
@@ -174,6 +182,8 @@ class ExportEngine:
             ]
             if has_logo:
                 cmd.extend(["-i", project.settings.logo_path])
+
+            if SubtitleRenderer.is_complex_filter(video_filter):
                 cmd.extend(["-filter_complex", video_filter, "-map", "[v_out]"])
             else:
                 cmd.extend(["-vf", video_filter, "-map", "0:v:0"])
@@ -191,16 +201,18 @@ class ExportEngine:
                 output_mp4_path
             ])
         elif has_logo:
-            # Logo only
-            video_filter = SubtitleRenderer.build_video_filter(
-                srt_path=srt_file,
-                mask_original_subs=False,
+            # Logo only (using exact logo_geometry coordinates matching preview)
+            video_filter = SubtitleRenderer.build_logo_only_filter(
+                video_w=vid_w,
+                video_h=vid_h,
                 logo_path=project.settings.logo_path,
                 logo_pos=project.settings.logo_position,
-                logo_w=project.settings.logo_width,
+                logo_width_pct=getattr(project.settings, "logo_width_pct", 12.0),
+                logo_margin_pct=getattr(project.settings, "logo_margin_pct", 2.5),
                 logo_opacity=project.settings.logo_opacity,
-                logo_margin_x=project.settings.logo_margin_x,
-                logo_margin_y=project.settings.logo_margin_y
+                logo_custom_x_pct=getattr(project.settings, "logo_custom_x_pct", -1.0),
+                logo_custom_y_pct=getattr(project.settings, "logo_custom_y_pct", -1.0),
+                logo_input_idx=2,
             )
             cmd = [
                 "ffmpeg", "-y",

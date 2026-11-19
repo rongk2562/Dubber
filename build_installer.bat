@@ -14,6 +14,6 @@ if %ERRORLEVEL% NEQ 0 (
 )
 echo.
 echo [+] Success! Your Setup Installer is ready at:
-echo     d:\summray_mo\dist\AI_Movie_Dubbing_Studio_Setup_v1.0.0.exe
+echo     d:\summray_mo\dist\AI_Movie_Dubbing_Studio_Setup_v1.4.0.exe
 pause
 

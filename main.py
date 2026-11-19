@@ -81,9 +81,11 @@ from PySide6.QtCore import Qt
 
 from app.ui.main_window import MainWindow
 from app.ui.styles import DARK_THEME_QSS
+from app.logger import setup_logging
 
 
 def main():
+    setup_logging()
     # Clean up any leftover .exe.old backup from a previous in-place self-update
     if getattr(sys, "frozen", False):
         old_bak = Path(sys.executable).resolve().with_name(Path(sys.executable).name + ".old")

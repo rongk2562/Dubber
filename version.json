@@ -1,9 +1,9 @@
 {
-  "version": "1.3.1",
+  "version": "1.4.0",
   "app_name": "AI Movie Translator & Auto Dubbing Studio",
   "release_date": "2026-11-19",
-  "download_url": "https://github.com/rongk2562/Dubber/releases/download/v1.3.1/AI_Movie_Dubbing_Studio.exe",
-  "changelog_km": "កំណែថ្មី v1.3.1:\n- 👁️ បន្ថែមប្រភពអត្ថបទចិន Video OCR (RapidOCR / PaddleOCR / Auto hardsub detection) ជាមួយ OpenCC t2s និងការច្រោះ watermark ស្វ័យប្រវត្តិ\n- 📥 បន្ថែមមុខងារ Export SRT ចិន (ជាបំណែកៗ + Prompt ChatGPT) និង នាំចូល SRT ខ្មែរ ជាមួយតារាង Preview Diff, Merge/Split, និង Undo/Backup\n- 🎨 កែសម្រួលផ្ទាំង Preview Subtitle Mask & Position ឱ្យ update ទំហំអក្សរ (Font Size) និង Margin V ភ្លាមៗ (60fps WYSIWYG) ដោយប្រើពុម្ពអក្សរ Noto Sans Khmer ដែល bundle ជាមួយកម្មវិធី",
-  "changelog_en": "Release v1.3.1:\n- 👁️ Added Video Hardsub OCR source (RapidOCR / PaddleOCR / Auto detection) with OpenCC t2s, static watermark removal, and Whisper CER comparison\n- 📥 Added Export Chinese SRT (chunked + ChatGPT prompt) and Import Khmer SRT with Diff Preview, Merge/Split matching, and 1-step Undo/Backup\n- 🎨 Live 60fps WYSIWYG preview in Subtitle Mask & Position dialog with bundled Noto Sans Khmer font and real segment text wrapping",
+  "download_url": "https://github.com/rongk2562/Dubber/releases/download/v1.4.0/AI_Movie_Dubbing_Studio.exe",
+  "changelog_km": "កំណែថ្មី v1.4.0:\n- 📦 មុខងារ Batch Mode ទាំង Folder (Natural Sort EP1/EP2/EP10, Start/Pause/Resume/Cancel/Retry, Clear Queue & Log, Resume តាម JSON, Glossary រួម)\n- 🎬 កំណត់ទីតាំងបិទបាំងអក្សរចិន & 🎛️ សំឡេង Audio Mix + Preview 12s ដាច់ដោយឡែកក្នុង Batch និង per-episode override\n- 💬 គាំទ្រ OpenAI / ChatGPT (រក្សាទុក Key សុវត្ថិភាពក្នុង OS Credential Store, Chunked Audio STT & Batch JSON Translation)\n- ⚡ បង្កើនល្បឿនដកស្រង់ OCR (RapidOCR max side 960), បកប្រែ Gemini/Google Batch និង សំឡេង AI Edge-TTS ៥ ដងព្រមគ្នា + តម្រឹមអក្សរចំកណ្ដាលប្រអប់ខ្មៅ/ព្រិល 1:1",
+  "changelog_en": "Release v1.4.0:\n- 📦 Full-Folder Batch Mode (Natural Sort EP1/EP2/EP10, Start/Pause/Resume/Cancel/Retry, Clear Queue & Log, JSON queue persistence, Shared Glossary)\n- 🎬 Batch Original Subtitle Masking & 🎛️ Audio Mix + 12s Preview with per-episode overrides isolated from single-video settings\n- 💬 OpenAI / ChatGPT integration (OS Credential Store API key security, silence-aware chunked STT, structured Batch JSON translation)\n- ⚡ Major speedups across OCR (RapidOCR max-side 960 + fast seek probe), Gemini Batch JSON & concurrent Google translation, 5x parallel Edge-TTS, and exact 1:1 Khmer subtitle vertical centering",
   "mandatory": false
 }

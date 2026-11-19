@@ -26,6 +26,7 @@ server/.env
 server/public/downloads/*.exe
 
 # IDE & OS files
+tools/keys/
 scratch/
 .vscode/
 .idea/

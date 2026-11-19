@@ -27,8 +27,25 @@ python main.py
 
 ### ដំណើរការតេស្តស្វ័យប្រវត្តិ (Run Unit Tests)
 ```bash
-python -m unittest tests/test_core.py
+python -m unittest discover tests -v
 ```
+
+---
+
+## ✨ អ្វីដែលថ្មីនៅក្នុង v1.4.0
+
+### 1. 📦 Batch Mode (ដំណើរការវីដេអូទាំង Folder ដោយស្វ័យប្រវត្តិ)
+- ចុចប៊ូតុង **📦 Batch** នៅលើ Toolbar ខាងលើ ឬ **File → 📦 Batch (Ctrl+Shift+B)**។
+- ជ្រើសរើស **Folder វីដេអូដើម** (អាចស្កេន Subfolders) និង **Folder លទ្ធផល** ជាមួយការតម្រៀបតាមលេខភាគធម្មជាតិ (`EP1, EP2, EP10`)។
+- កំណត់ជំហានដំណើរការ៖ ស្រង់អត្ថបទ → បកប្រែ → Export SRT (`.km.srt` & `.zh.srt`) → AI Dub + Render MP4។
+- **រក្សាទុកស្ថានភាពលើ Disk (`batch_queue.json`)**៖ អាច Pause / Resume / Cancel / Retry Failed និងបន្តឡើងវិញបន្ទាប់ពីបិទកម្មវិធី។
+- ប្រើប្រាស់ **Shared Glossary** រួមគ្នាគ្រប់ភាគ ដើម្បីឱ្យឈ្មោះតួអង្គដូចគ្នាទូទាំងរឿង។
+
+### 2. 💬 OpenAI / ChatGPT Integration (Speech-to-Text + Batch SRT Translation)
+- ចូលទៅ **Settings → 💬 OpenAI / ChatGPT** ដើម្បីបញ្ចូល **OpenAI API Key** (រក្សាទុកដោយសុវត្ថិភាពក្នុង Windows Credential Manager / DPAPI មិនរក្សាទុកជាអក្សរសាមញ្ញក្នុង JSON ឡើយ)។
+- ចុច **🔗 សាកល្បងការតភ្ជាប់ & ទាញម៉ូដែល** ដើម្បីផ្ទៀងផ្ទាត់ Key និងទាញបញ្ជីម៉ូដែលពី OpenAI API (គាំទ្រ Custom Base URL / Proxy)។
+- **Transcribe (OpenAI Audio API)**៖ បំបែកសំឡេងឆ្លាតវៃតាមចន្លោះស្ងាត់ (`< 24 MB` ក្នុងមួយកំណាត់) និងបូក Offset ពេលវេលាត្រឹមត្រូវ។
+- **Batch SRT Translation**៖ បកប្រែ 20–40 ជួរក្នុងមួយ Batch ជា Structured JSON ជាមួយការផ្ទៀងផ្ទាត់ Index ការ Retry តែជួរដែលខ្វះ ការប៉ាន់ស្មាន Token/តម្លៃ USD និង Google Fallback។
 
 ---
 

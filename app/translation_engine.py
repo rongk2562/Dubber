@@ -218,6 +218,13 @@ LATIN_AND_GLOSSARY_FIXES = [
 class TranslationEngine:
     def __init__(self, settings: Optional[ProjectSettings] = None):
         self.settings = settings or ProjectSettings()
+        self._cached_gemini_model: Optional[str] = None
+        self._http_client: Optional[httpx.Client] = None
+
+    def _get_http_client(self, timeout: float = 12.0) -> httpx.Client:
+        if self._http_client is None or self._http_client.is_closed:
+            self._http_client = httpx.Client(timeout=timeout)
+        return self._http_client
 
     def apply_glossary(self, text: str, glossary: List[GlossaryItem]) -> str:
         """Replace defined glossary terms in text."""
@@ -615,7 +622,9 @@ class TranslationEngine:
                 print(f"[Translation] Claude failed: {e}")
 
         # 3. Try OpenAI API
-        if provider == "openai" and self.settings.openai_api_key:
+        from app.secrets import get_openai_api_key
+        oa_key = (self.settings.openai_api_key or "").strip() or get_openai_api_key()
+        if provider == "openai" and oa_key:
             try:
                 res = self._translate_openai(
                     src_text, glossary, target_lang=t_lang,
@@ -634,7 +643,11 @@ class TranslationEngine:
         self,
         segments: List[Segment],
         glossary: Optional[List[GlossaryItem]] = None,
-        target_lang: Optional[str] = None
+        target_lang: Optional[str] = None,
+        progress_cb: Optional[Callable[[int, str], None]] = None,
+        usage_cb: Optional[Callable[[object], None]] = None,
+        cancel_cb: Optional[Callable[[], bool]] = None,
+        skip_imported: bool = False,
     ) -> List[Segment]:
         """Batch translate a list of segments in-place with surrounding conversation context and ASR repair."""
         t_lang = target_lang or getattr(self.settings, "target_language", "km") or "km"
@@ -651,9 +664,59 @@ class TranslationEngine:
             if item.src_term not in glossary_terms:
                 active_glossary.append(item)
 
+        provider = (getattr(self.settings, "translation_provider", "google") or "google").lower()
+        if provider == "openai":
+            from app.openai_client import OpenAIClient
+            client = OpenAIClient(self.settings)
+            lang_meta = TARGET_LANG_MAP.get(t_lang) or TARGET_LANG_MAP["km"]
+
+            def _google_fallback(seg: Segment) -> str:
+                raw = self._translate_web_or_heuristic(seg.text_src, active_glossary, target_lang=t_lang)
+                return self._post_process_translation(raw, seg.text_src, t_lang, slot_duration=seg.slot)
+
+            client.translate_segments_batch(
+                segments=segments,
+                glossary=active_glossary,
+                target_lang_name=lang_meta["prompt_name"],
+                batch_size=30,
+                skip_imported=skip_imported,
+                fallback_fn=_google_fallback,
+                progress_cb=progress_cb,
+                usage_cb=usage_cb,
+                cancel_cb=cancel_cb,
+            )
+            for seg in segments:
+                if seg.text_km and not (skip_imported and getattr(seg, "translation_source", "") == "imported"):
+                    seg.text_km = self._post_process_translation(
+                        seg.text_km, seg.text_src, t_lang, slot_duration=seg.slot
+                    )
+            return segments
+
         total = len(segments)
+        if provider == "gemini" and (getattr(self.settings, "gemini_api_key", "") or "").strip():
+            self._translate_segments_gemini_batch(
+                segments, active_glossary, t_lang,
+                progress_cb=progress_cb, cancel_cb=cancel_cb, skip_imported=skip_imported,
+            )
+            return segments
+
+        if provider in ("google", "gemini"):
+            # Fast concurrent connection-pooled Google Translate (also used when Gemini key is empty)
+            self._translate_segments_google_concurrent(
+                segments, active_glossary, t_lang,
+                progress_cb=progress_cb, cancel_cb=cancel_cb, skip_imported=skip_imported,
+            )
+            return segments
+
         for i, seg in enumerate(segments):
+            if cancel_cb and cancel_cb():
+                break
+            if skip_imported and getattr(seg, "translation_source", "") == "imported":
+                continue
             if seg.text_src and seg.text_src.strip():
+                if progress_cb:
+                    pct = int((i / max(1, total)) * 100)
+                    progress_cb(pct, f"កំពុងបកប្រែវគ្គ {i + 1}/{total}...")
                 prev_txt = segments[i - 1].text_src if i > 0 else ""
                 next_txt = segments[i + 1].text_src if i + 1 < total else ""
                 seg.text_km = self.translate_segment(
@@ -665,6 +728,171 @@ class TranslationEngine:
                     slot_duration=seg.slot
                 )
         return segments
+
+    def _direct_khmer_match(self, src_text: str, target_lang: str, slot_duration: float = 0.0) -> Optional[str]:
+        if target_lang != "km":
+            return None
+        src_clean = re.sub(r'[\s\.\,\!\?\"\'\(\)\—\-\:;។៕ៗ]+', '', src_text)
+        for zh_key, km_val in CHINESE_DRAMA_KHMER_MAP.items():
+            zh_clean = re.sub(r'[\s\.\,\!\?\"\'\(\)\—\-\:;]+', '', zh_key)
+            if src_clean == zh_clean:
+                return self._post_process_translation(km_val, src_text, target_lang, slot_duration=slot_duration)
+            if len(zh_clean) >= 4 and (src_clean in zh_clean or zh_clean in src_clean) and abs(len(src_clean) - len(zh_clean)) <= 4:
+                return self._post_process_translation(km_val, src_text, target_lang, slot_duration=slot_duration)
+        return None
+
+    def _translate_segments_gemini_batch(
+        self,
+        segments: List[Segment],
+        glossary: List[GlossaryItem],
+        target_lang: str,
+        progress_cb: Optional[Callable[[int, str], None]] = None,
+        cancel_cb: Optional[Callable[[], bool]] = None,
+        skip_imported: bool = False,
+        batch_size: int = 25,
+    ) -> None:
+        """
+        Translate segments via Gemini in structured JSON batches (~25 lines per request)
+        using cached working model & persistent HTTP connection pool (10-30x faster).
+        """
+        import json as _json
+        from app.openai_client import validate_and_extract_batch_json
+
+        lang_meta = TARGET_LANG_MAP.get(target_lang) or TARGET_LANG_MAP["km"]
+        lang_name = lang_meta["prompt_name"]
+        glossary_txt = "\n".join(f"- '{g.src_term}' -> '{g.km_term}'" for g in glossary if g.src_term and g.km_term)
+
+        pending_indices: List[int] = []
+        for idx, seg in enumerate(segments):
+            if skip_imported and getattr(seg, "translation_source", "") == "imported":
+                continue
+            src = (seg.text_src or "").strip()
+            if not src:
+                continue
+            direct = self._direct_khmer_match(src, target_lang, seg.slot)
+            if direct is not None:
+                seg.text_km = direct
+            else:
+                pending_indices.append(idx)
+
+        total_p = len(pending_indices)
+        if total_p == 0:
+            if progress_cb:
+                progress_cb(100, "បកប្រែរួចរាល់!")
+            return
+
+        fallback_indices: List[int] = []
+        done = 0
+        for start in range(0, total_p, batch_size):
+            if cancel_cb and cancel_cb():
+                break
+            chunk_idxs = pending_indices[start:start + batch_size]
+            if progress_cb:
+                pct = int((done / max(1, total_p)) * 90)
+                progress_cb(pct, f"កំពុងបកប្រែ Batch Gemini ({start + 1}–{min(total_p, start + len(chunk_idxs))}/{total_p})...")
+
+            prev_ctx = [segments[p].text_src for p in range(max(0, chunk_idxs[0] - 3), chunk_idxs[0]) if segments[p].text_src]
+            payload = [
+                {"index": idx, "slot_sec": round(segments[idx].slot, 2), "text": segments[idx].text_src.strip()}
+                for idx in chunk_idxs
+            ]
+            ctx_str = ("Previous lines (context only):\n" + "\n".join(f"- {c}" for c in prev_ctx) + "\n\n") if prev_ctx else ""
+            prompt = (
+                f"You are a master {lang_name} movie dubbing translator. Translate dialogue into natural, punchy spoken {lang_name} "
+                f"(never literal word-for-word; keep sentences concise to fit each slot_sec).\n"
+                + (f"Glossary:\n{glossary_txt}\n" if glossary_txt else "")
+                + f"Return ONLY valid JSON with shape {{\"translations\": {{\"<index>\": \"<text>\"}}}} matching EVERY index.\n"
+                + ctx_str
+                + "Lines:\n"
+                + _json.dumps(payload, ensure_ascii=False)
+            )
+
+            try:
+                raw_out = self._call_gemini_api(prompt, timeout=18.0, response_mime_type="application/json", raw_json=True)
+                matched, missing = validate_and_extract_batch_json(raw_out, chunk_idxs)
+                for m_idx, m_txt in matched.items():
+                    segments[m_idx].text_km = self._post_process_translation(
+                        m_txt, segments[m_idx].text_src, target_lang, slot_duration=segments[m_idx].slot
+                    )
+                fallback_indices.extend(missing)
+            except Exception as e:
+                print(f"[Translation] Gemini batch fallback note: {e}")
+                fallback_indices.extend(chunk_idxs)
+            done += len(chunk_idxs)
+
+        if fallback_indices and not (cancel_cb and cancel_cb()):
+            if progress_cb:
+                progress_cb(90, f"កំពុងបំពេញ {len(fallback_indices)} ជួរដែលនៅសល់...")
+            self._translate_indices_google_concurrent(
+                segments, fallback_indices, glossary, target_lang, progress_cb=None, cancel_cb=cancel_cb
+            )
+
+        if progress_cb:
+            progress_cb(100, "ការបកប្រែរួចរាល់!")
+
+    def _translate_segments_google_concurrent(
+        self,
+        segments: List[Segment],
+        glossary: List[GlossaryItem],
+        target_lang: str,
+        progress_cb: Optional[Callable[[int, str], None]] = None,
+        cancel_cb: Optional[Callable[[], bool]] = None,
+        skip_imported: bool = False,
+    ) -> None:
+        pending_indices: List[int] = []
+        for idx, seg in enumerate(segments):
+            if skip_imported and getattr(seg, "translation_source", "") == "imported":
+                continue
+            src = (seg.text_src or "").strip()
+            if not src:
+                continue
+            direct = self._direct_khmer_match(src, target_lang, seg.slot)
+            if direct is not None:
+                seg.text_km = direct
+            else:
+                pending_indices.append(idx)
+
+        self._translate_indices_google_concurrent(
+            segments, pending_indices, glossary, target_lang, progress_cb=progress_cb, cancel_cb=cancel_cb
+        )
+
+    def _translate_indices_google_concurrent(
+        self,
+        segments: List[Segment],
+        indices: List[int],
+        glossary: List[GlossaryItem],
+        target_lang: str,
+        progress_cb: Optional[Callable[[int, str], None]] = None,
+        cancel_cb: Optional[Callable[[], bool]] = None,
+    ) -> None:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        total = len(indices)
+        if total == 0:
+            if progress_cb:
+                progress_cb(100, "បកប្រែរួចរាល់!")
+            return
+
+        done_cnt = 0
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            futs = {}
+            for idx in indices:
+                if cancel_cb and cancel_cb():
+                    break
+                futs[pool.submit(self._translate_web_or_heuristic, segments[idx].text_src.strip(), glossary, target_lang)] = idx
+
+            for fut in as_completed(futs):
+                idx = futs[fut]
+                try:
+                    raw = fut.result()
+                except Exception:
+                    raw = self.apply_glossary(segments[idx].text_src, glossary)
+                segments[idx].text_km = self._post_process_translation(
+                    raw, segments[idx].text_src, target_lang, slot_duration=segments[idx].slot
+                )
+                done_cnt += 1
+                if progress_cb and (done_cnt % 3 == 0 or done_cnt == total):
+                    pct = int((done_cnt / max(1, total)) * 100)
+                    progress_cb(pct, f"កំពុងបកប្រែ {done_cnt}/{total}...")
 
     def _build_prompt(
         self,
@@ -741,59 +969,84 @@ class TranslationEngine:
             f"Current line to dub: \"{src_text}\""
         )
 
-    def _call_gemini_api(self, prompt: str, timeout: float = 12.0) -> str:
+    def _call_gemini_api(
+        self,
+        prompt: str,
+        timeout: float = 12.0,
+        response_mime_type: Optional[str] = None,
+        raw_json: bool = False,
+    ) -> str:
         """
-        Call Google Gemini REST API using httpx with automatic model fallback.
-        Tries latest active models first (gemini-flash-lite-latest, gemini-3.1-flash-lite, etc.)
-        before legacy models to avoid 404 or deprecation errors.
+        Call Google Gemini REST API using persistent httpx connection pool & cached working model
+        so dead/404 model names are never retried repeatedly across lines.
         """
-        candidate_models = [
+        base_candidates = [
             "gemini-flash-lite-latest",
-            "gemini-3.1-flash-lite",
-            "gemini-3-flash-preview",
-            "gemini-3.5-flash-lite",
-            "gemini-flash-latest",
+            "gemini-2.5-flash-lite",
             "gemini-2.5-flash",
+            "gemini-flash-latest",
+            "gemini-2.0-flash",
             "gemini-1.5-flash",
         ]
+        if self._cached_gemini_model and self._cached_gemini_model in base_candidates:
+            candidate_models = [self._cached_gemini_model] + [m for m in base_candidates if m != self._cached_gemini_model]
+        elif self._cached_gemini_model:
+            candidate_models = [self._cached_gemini_model] + base_candidates
+        else:
+            candidate_models = base_candidates
+
         api_key = (self.settings.gemini_api_key or "").strip()
         if not api_key:
             raise ValueError("Gemini API key is empty")
 
+        gen_cfg: dict = {
+            "temperature": 0.25,
+            "maxOutputTokens": 2048 if raw_json else 350,
+        }
+        if response_mime_type:
+            gen_cfg["responseMimeType"] = response_mime_type
+
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {
-                "temperature": 0.25,
-                "maxOutputTokens": 350
-            }
+            "generationConfig": gen_cfg,
         }
 
         last_err = ""
-        with httpx.Client(timeout=timeout) as client:
-            for model_name in candidate_models:
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
-                try:
-                    resp = client.post(url, json=payload)
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        candidates = data.get("candidates", [])
-                        if candidates:
-                            parts = candidates[0].get("content", {}).get("parts", [])
-                            if parts:
-                                text = parts[0].get("text", "").strip()
-                                clean = re.sub(r'^[\*\s>«"\'“]+|[\*\s>»"\'”]+$', '', text).strip()
-                                lines = [ln.strip() for ln in clean.split("\n") if ln.strip()]
-                                if lines:
-                                    clean = re.sub(r'^[>\-\*\d\.\s]+', '', lines[0]).strip().strip('"').strip("'")
-                                return clean
-                    elif resp.status_code in (400, 404, 503):
-                        last_err = f"HTTP {resp.status_code} ({model_name})"
-                        continue
-                    else:
-                        last_err = f"HTTP {resp.status_code}: {resp.text[:100]}"
-                except Exception as e:
-                    last_err = f"{model_name}: {str(e)}"
+        client = self._get_http_client(timeout=timeout)
+        for model_name in candidate_models:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+            try:
+                resp = client.post(url, json=payload, timeout=timeout)
+                if resp.status_code == 200:
+                    self._cached_gemini_model = model_name
+                    data = resp.json()
+                    candidates = data.get("candidates", [])
+                    if candidates:
+                        parts = candidates[0].get("content", {}).get("parts", [])
+                        if parts:
+                            text = parts[0].get("text", "").strip()
+                            if raw_json:
+                                return text
+                            clean = re.sub(r'^[\*\s>«"\'“]+|[\*\s>»"\'”]+$', '', text).strip()
+                            lines = [ln.strip() for ln in clean.split("\n") if ln.strip()]
+                            if lines:
+                                clean = re.sub(r'^[>\-\*\d\.\s]+', '', lines[0]).strip().strip('"').strip("'")
+                            return clean
+                elif resp.status_code in (401, 403):
+                    raise RuntimeError(f"Invalid Gemini API key (HTTP {resp.status_code})")
+                elif resp.status_code == 429:
+                    last_err = f"HTTP 429 ({model_name})"
+                    break
+                elif resp.status_code in (400, 404, 503):
+                    last_err = f"HTTP {resp.status_code} ({model_name})"
                     continue
+                else:
+                    last_err = f"HTTP {resp.status_code}: {resp.text[:100]}"
+            except RuntimeError:
+                raise
+            except Exception as e:
+                last_err = f"{model_name}: {str(e)}"
+                continue
 
         raise RuntimeError(f"All Gemini models failed ({last_err})")
 
@@ -861,20 +1114,26 @@ class TranslationEngine:
             context_before=context_before, context_after=context_after,
             slot_duration=slot_duration
         )
+        from app.secrets import get_openai_api_key
+        from app.openai_client import DEFAULT_OPENAI_BASE_URL
+        oa_key = (self.settings.openai_api_key or "").strip() or get_openai_api_key()
+        base_url = (getattr(self.settings, "openai_base_url", "") or DEFAULT_OPENAI_BASE_URL).strip().rstrip("/")
+        oa_model = (getattr(self.settings, "openai_trans_model", "gpt-4o-mini") or "gpt-4o-mini").strip()
         headers = {
-            "Authorization": f"Bearer {self.settings.openai_api_key}",
+            "Authorization": f"Bearer {oa_key}",
             "Content-Type": "application/json"
         }
         body = {
-            "model": "gpt-4o-mini",
+            "model": oa_model,
             "messages": [
                 {"role": "system", "content": f"You are a professional movie dubbing dialogue writer into {lang_name}."},
                 {"role": "user", "content": prompt}
             ],
             "temperature": 0.4
         }
-        with httpx.Client(timeout=10.0) as client:
-            resp = client.post("https://api.openai.com/v1/chat/completions", headers=headers, json=body)
+        with httpx.Client(timeout=15.0) as client:
+            resp = client.post(f"{base_url}/chat/completions", headers=headers, json=body)
+            resp.raise_for_status()
             data = resp.json()
             return data["choices"][0]["message"]["content"].strip().strip('"').strip("'")
 

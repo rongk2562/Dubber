@@ -12,9 +12,10 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
     QPushButton, QLabel, QFileDialog, QMessageBox, QProgressBar,
     QMenuBar, QMenu, QToolBar, QStatusBar, QGroupBox, QSlider,
-    QCheckBox, QDialog, QTabWidget, QComboBox, QLineEdit
+    QCheckBox, QDialog, QTabWidget, QComboBox, QLineEdit,
+    QSystemTrayIcon, QSizePolicy, QApplication, QScrollArea, QFrame
 )
-from PySide6.QtCore import Qt, QThread, Signal, QTimer
+from PySide6.QtCore import Qt, QThread, Signal, QTimer, QSettings, QRect
 from PySide6.QtGui import QIcon, QAction, QFont
 
 from app.models import Project, Segment, ProjectSettings
@@ -32,6 +33,10 @@ from app.sync_engine import SyncEngine, SyncReport
 from app.export_engine import ExportEngine
 from app.utils import is_ffmpeg_available
 
+from app.ui.theme import (
+    ToggleSwitch, SegmentedControl,
+    get_active_screen, is_geometry_on_any_screen, clamp_widget_to_screen
+)
 from app.ui.video_player import VideoPlayerWidget
 from app.ui.segment_table import SegmentTableWidget
 from app.ui.speaker_manager import SpeakerManagerDialog
@@ -81,15 +86,72 @@ class MainWindow(QMainWindow):
         self.sync_engine = SyncEngine(self.audio_engine, self.tts_engine, self.translation_engine)
         self.export_engine = ExportEngine(self.audio_engine)
 
+        # Notification Manager (Singleton) & System Tray
+        from app.notifications import NotificationManager
+        self.notif_manager = NotificationManager.instance()
+        self.notif_manager.configure(
+            enabled=getattr(self.project.settings, "notify_enabled", True),
+            show_toast=getattr(self.project.settings, "notify_show_toast", True),
+            tray_enabled=getattr(self.project.settings, "notify_windows_tray", True),
+            interval_hours=int(getattr(self.project.settings, "notify_interval_hours", 6)),
+            sound_enabled=getattr(self.project.settings, "notify_sound", True),
+            lang=self.lang,
+        )
+        self._active_toast = None
+        self.tray_icon = None
+
         self._init_ui()
+        self._setup_notifications_ui()
         self._setup_autosave()
-        self._check_resume_session()
+        if "--self-test" not in sys.argv and os.environ.get("QT_QPA_PLATFORM") != "offscreen":
+            self._check_resume_session()
         if getattr(self.project.settings, "auto_check_updates", True):
             QTimer.singleShot(3500, self._silent_startup_update_check)
+        # Non-blocking async remote announcements check (adds ~0ms startup time)
+        QTimer.singleShot(800, lambda: self.notif_manager.poll_remote_async(force=False))
+
+    def _apply_screen_constraints(self, screen=None):
+        scr = screen or get_active_screen(self)
+        if scr is None:
+            return
+        avail = scr.availableGeometry()
+        min_w = min(1024, max(640, avail.width() - 20))
+        min_h = min(600, max(480, avail.height() - 20))
+        self.setMinimumSize(min_w, min_h)
+        clamp_widget_to_screen(self, scr, max_ratio=1.0)
+
+    def _restore_window_geometry(self):
+        scr = get_active_screen(self)
+        avail = scr.availableGeometry() if scr else QRect(0, 0, 1366, 768)
+        default_w = min(avail.width(), max(self.minimumWidth(), int(avail.width() * 0.92)))
+        default_h = min(avail.height(), max(self.minimumHeight(), int(avail.height() * 0.92)))
+
+        restored = False
+        if "--self-test" not in sys.argv and os.environ.get("QT_QPA_PLATFORM") != "offscreen":
+            qs = QSettings("KhmerAIDubStudio", "AIMovieDubbing")
+            saved_rect = qs.value("main_window/rect")
+            if isinstance(saved_rect, QRect) and is_geometry_on_any_screen(saved_rect):
+                self.setGeometry(saved_rect)
+                restored = True
+            saved_split = qs.value("main_window/splitter")
+            if saved_split:
+                try:
+                    self.splitter.restoreState(saved_split)
+                except Exception:
+                    pass
+
+        if not restored:
+            self.resize(default_w, default_h)
+            x = avail.left() + max(0, (avail.width() - default_w) // 2)
+            y = avail.top() + max(0, (avail.height() - default_h) // 2)
+            self.move(x, y)
+            self.splitter.setSizes([int(default_w * 0.34), int(default_w * 0.66)])
+
+        clamp_widget_to_screen(self, scr, max_ratio=1.0)
 
     def _init_ui(self):
-        self.resize(1540, 880)
-        self.setMinimumSize(1120, 660)
+        self._screen_hook_connected = False
+        self._apply_screen_constraints()
         self.setWindowTitle(f"{STRINGS[self.lang]['app_title']} v{APP_VERSION}")
         for icon_rel in ("assets/logo.ico", "assets/logo.png", "assets/logo.svg"):
             icon_file = get_resource_path(icon_rel)
@@ -97,28 +159,53 @@ class MainWindow(QMainWindow):
                 self.setWindowIcon(QIcon(str(icon_file)))
                 break
 
-        # Central Widget & Main Splitter
+        # Central Widget & Main Layout (QVBoxLayout -> Header Stepper + Update Banner + Splitter)
         central = QWidget(self)
         central.setObjectName("centralWidget")
         self.setCentralWidget(central)
         main_layout = QVBoxLayout(central)
         main_layout.setContentsMargins(10, 8, 10, 8)
-        main_layout.setSpacing(6)
+        main_layout.setSpacing(8)
 
-        # Splitter: Left (Video + Mixing) | Right (Segment Editor)
+        # Header Stepper & Top-Right Corner Controls
+        self.header_bar = self._create_header_stepper()
+        main_layout.addWidget(self.header_bar)
+
+        from app.ui.notification_ui import UpdateBannerWidget
+        self.update_banner = UpdateBannerWidget(self.notif_manager, self)
+        main_layout.addWidget(self.update_banner)
+
+        # Splitter: Left (Scrollable Video + Mixing, Pinned Bottom Preview) | Right (Segment Editor)
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
-        self.splitter.setHandleWidth(8)
+        self.splitter.setHandleWidth(5)
 
         # --- Left Panel ---
         left_panel = QWidget()
+        left_panel.setMinimumWidth(300)
         left_layout = QVBoxLayout(left_panel)
-        left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.setSpacing(8)
+        left_layout.setContentsMargins(0, 0, 6, 0)
+        left_layout.setSpacing(6)
+
+        self.left_scroll = QScrollArea()
+        self.left_scroll.setWidgetResizable(True)
+        self.left_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.left_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
+        left_scroll_body = QWidget()
+        left_scroll_body.setObjectName("scrollBody")
+        lsb_layout = QVBoxLayout(left_scroll_body)
+        lsb_layout.setContentsMargins(0, 0, 2, 0)
+        lsb_layout.setSpacing(8)
 
         self.video_player = VideoPlayerWidget()
         self.video_player.position_changed.connect(self._on_player_position_changed)
         self.video_player.preview_requested.connect(self._run_preview_result)
-        left_layout.addWidget(self.video_player, stretch=1)
+        self.video_player.rerender_requested.connect(self._export_dubbed)
+        self.video_player.video_dropped.connect(self._load_video_path)
+        self.video_player.browse_requested.connect(self._import_video)
+        self.video_player.logo_dragged.connect(self._on_logo_dragged_in_preview)
+        lsb_layout.addWidget(self.video_player, stretch=1)
 
         # Lower Tools Tabs (Audio Mixing & Watermark Logo Tool)
         self.tool_tabs = QTabWidget()
@@ -126,38 +213,27 @@ class MainWindow(QMainWindow):
         self.logo_panel = self._create_logo_panel()
 
         s = STRINGS[self.lang]
-        self.tool_tabs.addTab(self.mixing_panel, s.get("audio_mixing_tab", "🎛️ សំឡេង (Audio)"))
-        self.tool_tabs.addTab(self.logo_panel, s.get("logo_tool_tab", "🎨 Logo"))
-        left_layout.addWidget(self.tool_tabs, stretch=0)
+        self.tool_tabs.addTab(self.mixing_panel, "🎛️ សំឡេង" if self.lang == "km" else "🎛️ Audio")
+        self.tool_tabs.addTab(self.logo_panel, "🎨 Logo")
+        self.tool_tabs.currentChanged.connect(self._on_tool_tab_changed)
+        lsb_layout.addWidget(self.tool_tabs, stretch=0)
+        self._sync_overlays_to_player()
 
-        # Prominent Fast Preview Button (Always accessible)
-        self.btn_main_preview = QPushButton("👁️ " + s.get("btn_preview_dubbed", "មើលលទ្ធផលសាកល្បង") + " (Ctrl+P)")
-        self.btn_main_preview.setStyleSheet("""
-            QPushButton {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #6366f1, stop:1 #8b5cf6);
-                color: white;
-                font-weight: bold;
-                font-size: 13px;
-                padding: 7px 14px;
-                border-radius: 6px;
-                border: 1px solid #a855f7;
-            }
-            QPushButton:hover {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #4f46e5, stop:1 #7c3aed);
-            }
-            QPushButton:pressed {
-                background-color: #4338ca;
-            }
-        """)
+        self.left_scroll.setWidget(left_scroll_body)
+        left_layout.addWidget(self.left_scroll, stretch=1)
+
+        # Secondary Preview Button pinned OUTSIDE scroll area at bottom
+        self.btn_main_preview = QPushButton("👁️ មើលលទ្ធផលសាកល្បង (Ctrl+P)" if self.lang == "km" else "👁️ Preview Result (Ctrl+P)")
+        self.btn_main_preview.setToolTip("បង្កើត និងចាក់មើលលទ្ធផលសាកល្បងលឿនមុនពេល Export (Ctrl+P)")
         self.btn_main_preview.clicked.connect(self._run_preview_result)
-        left_layout.addWidget(self.btn_main_preview)
+        left_layout.addWidget(self.btn_main_preview, stretch=0)
 
         self.splitter.addWidget(left_panel)
 
         # --- Right Panel ---
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
-        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setContentsMargins(6, 0, 0, 0)
         right_layout.setSpacing(6)
 
         self.segment_table = SegmentTableWidget()
@@ -165,62 +241,55 @@ class MainWindow(QMainWindow):
         self.segment_table.preview_tts_requested.connect(self._preview_segment_tts)
         self.segment_table.segment_speed_changed.connect(self._on_segment_speed_changed)
         self.segment_table.data_changed.connect(self._on_data_changed)
+        self.segment_table.generate_tts_requested.connect(self._run_tts_generation)
+        self._populate_engine_bar(self.segment_table.engine_bar)
         right_layout.addWidget(self.segment_table)
 
         self.splitter.addWidget(right_panel)
         self.splitter.setStretchFactor(0, 0)
         self.splitter.setStretchFactor(1, 1)
-        self.splitter.setSizes([410, 1110])
+        self.splitter.splitterMoved.connect(lambda _p, _i: self._reflow_engine_bar())
 
-        main_layout.addWidget(self.splitter)
+        main_layout.addWidget(self.splitter, stretch=1)
 
-        # Build Menus & ToolBar after widgets exist
+        # Build MenuBar
         self._create_menu_bar()
-        self._create_tool_bar()
 
-        # Status Bar with Progress Bar
+        # Status Bar: Status + Progress + Task Name + Cancel + Segment Count + Version
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
 
+        self.lbl_task_name = QLabel("")
+        self.lbl_task_name.setStyleSheet("color: #2D8CFF; font-weight: 600; font-size: 8.5pt; margin-right: 6px;")
+        self.lbl_task_name.setVisible(False)
+        self.status_bar.addPermanentWidget(self.lbl_task_name)
+
         self.progress_bar = QProgressBar()
-        self.progress_bar.setFixedWidth(220)
+        self.progress_bar.setMinimumWidth(90)
+        self.progress_bar.setMaximumWidth(180)
         self.progress_bar.setVisible(False)
         self.status_bar.addPermanentWidget(self.progress_bar)
 
         self.btn_cancel_task = QPushButton("✖ បោះបង់" if self.lang == "km" else "✖ Cancel")
-        self.btn_cancel_task.setStyleSheet("background-color: #991b1b; color: white; font-size: 11px; padding: 2px 8px; border-radius: 4px; font-weight: bold;")
+        self.btn_cancel_task.setProperty("variant", "danger")
         self.btn_cancel_task.setVisible(False)
         self.btn_cancel_task.clicked.connect(self._cancel_current_worker)
         self.status_bar.addPermanentWidget(self.btn_cancel_task)
 
-        self.lbl_stats = QLabel("0 Segments")
-        self.lbl_stats.setStyleSheet("color: #94a3b8; font-size: 11px; margin-right: 12px;")
+        self.lbl_stats = QLabel("0 ឃ្លា" if self.lang == "km" else "0 Segments")
+        self.lbl_stats.setStyleSheet("color: #9AA8C4; font-size: 8.5pt; margin-right: 10px;")
         self.status_bar.addPermanentWidget(self.lbl_stats)
 
-        # Version Badge in Status Bar
         self.btn_status_ver = QPushButton(f"v{APP_VERSION}")
         self.btn_status_ver.setFlat(True)
-        self.btn_status_ver.setToolTip("ចុចដើម្បីពិនិត្យមើលកំណែថ្មី (Click to check for updates)" if self.lang == "km" else "Click to check for updates")
-        self.btn_status_ver.setStyleSheet("""
-            QPushButton {
-                color: #38bdf8;
-                font-size: 11px;
-                font-weight: bold;
-                background: transparent;
-                border: 1px solid #1e293b;
-                border-radius: 4px;
-                padding: 1px 6px;
-                margin-right: 8px;
-            }
-            QPushButton:hover {
-                background-color: #0c4a6e;
-                color: #7dd3fc;
-            }
-        """)
+        self.btn_status_ver.setToolTip("ពិនិត្យកំណែថ្មី" if self.lang == "km" else "Check for updates")
         self.btn_status_ver.clicked.connect(self._check_updates_dialog)
         self.status_bar.addPermanentWidget(self.btn_status_ver)
 
         self.status_bar.showMessage(STRINGS[self.lang]["status_ready"])
+        self._restore_window_geometry()
+        self._update_stepper_states()
+        self._update_responsive_header()
 
     def _create_menu_bar(self):
         menubar = self.menuBar()
@@ -235,6 +304,7 @@ class MainWindow(QMainWindow):
         menu_file.addAction(s["save_project_as"], self._save_project_as, "Ctrl+Shift+S")
         menu_file.addSeparator()
         menu_file.addAction(s["import_video"], self._import_video, "Ctrl+I")
+        menu_file.addAction("📦 Batch (ដំណើរការទាំង Folder)..." if self.lang == "km" else "📦 Batch (Folder Queue)...", self._open_batch_dialog, "Ctrl+Shift+B")
         menu_file.addAction("📥 នាំចូល SRT (Import SRT)..." if self.lang == "km" else "📥 Import SRT...", self._import_srt_external)
         menu_file.addAction("📤 Export SRT ចិន (សម្រាប់បកប្រែ)..." if self.lang == "km" else "📤 Export Chinese SRT (for Translation)...", self._export_zh_srt_chatgpt)
         menu_file.addSeparator()
@@ -278,39 +348,236 @@ class MainWindow(QMainWindow):
         menu_help.addAction("តម្រូវការប្រព័ន្ធ (SRS Specification)", self._show_srs_help)
         menu_help.addAction("អំពីកម្មវិធី (About)", self._show_about)
 
-    def _create_tool_bar(self):
-        toolbar = QToolBar("Main Workflow Toolbar")
-        toolbar.setMovable(False)
-        self.addToolBar(toolbar)
-        s = STRINGS[self.lang]
+    def _create_header_stepper(self) -> QWidget:
+        """Create responsive 6-step horizontal stepper header + compact/overflow '⋯' + top-right utilities."""
+        header = QWidget()
+        header.setObjectName("headerStepper")
+        header.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+        h_layout = QHBoxLayout(header)
+        h_layout.setContentsMargins(10, 4, 10, 4)
+        h_layout.setSpacing(6)
 
-        # Step 0: Import Video
-        self.act_import = toolbar.addAction("🎬 នាំចូល" if self.lang == "km" else "🎬 Import", self._import_video)
-        self.act_import.setToolTip(s["btn_import_video"])
-        toolbar.addSeparator()
+        self.step_buttons = []
+        self.step_seps = []
+        self._step_meta = [
+            ("① នាំចូល", "① Import", "🎬", "នាំចូលវីដេអូ (Ctrl+I)", "Import video (Ctrl+I)"),
+            ("② អត្ថបទចិន", "② Chinese Text", "🎙️", "ស្រង់អក្សរចិនពីសំឡេង/OCR", "Extract Chinese text (ASR/OCR)"),
+            ("③ បកប្រែ", "③ Translate", "🌐", "បកប្រែអត្ថបទទៅជាភាសាគោលដៅ", "Translate segments"),
+            ("④ សំឡេង AI", "④ AI Voice", "🗣️", "បង្កើតសំឡេង AI និងតម្រឹមពេលវេលា", "Generate AI voices & auto-sync"),
+            ("⑤ មើលជាមុន", "⑤ Preview", "👁️", "មើលលទ្ធផលសាកល្បង (Ctrl+P)", "Preview dubbed video (Ctrl+P)"),
+            ("⑥ នាំចេញ", "⑥ Export", "🚀", "នាំចេញវីដេអូ MP4 (Ctrl+E)", "Export final MP4 video (Ctrl+E)"),
+        ]
 
-        # Step 1: Source Text Extraction (Whisper / OCR / Auto)
-        self.act_transcribe = toolbar.addAction("🎙️ ១. ស្ដាប់/OCR" if self.lang == "km" else "🎙️ 1. Extract", self._run_transcription)
-        self.act_transcribe.setToolTip(s["btn_transcribe"])
+        for idx, (km_lbl, en_lbl, icon_ch, km_tip, en_tip) in enumerate(self._step_meta):
+            btn = QPushButton(km_lbl if self.lang == "km" else en_lbl)
+            btn.setObjectName("stepPill")
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setToolTip(km_tip if self.lang == "km" else en_tip)
+            btn.clicked.connect(lambda checked=False, s_idx=idx: self._on_stepper_clicked(s_idx))
+            self.step_buttons.append(btn)
+            h_layout.addWidget(btn)
+            if idx < len(self._step_meta) - 1:
+                sep = QLabel("›")
+                sep.setStyleSheet("color: #475569; font-weight: bold; font-size: 10.5pt;")
+                self.step_seps.append(sep)
+                h_layout.addWidget(sep)
+
+        # Overflow menu button ("⋯") visible in compact/narrow modes so nothing ever hides silently
+        self.btn_header_more = QPushButton("⋯")
+        self.btn_header_more.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_header_more.setToolTip("ជំហាន & ឧបករណ៍បន្ថែម" if self.lang == "km" else "More workflow actions")
+        self.btn_header_more.clicked.connect(self._open_header_overflow_menu)
+        self.btn_header_more.setVisible(False)
+        h_layout.addWidget(self.btn_header_more)
+
+        h_layout.addStretch(1)
+
+        # Batch Folder Mode button
+        self.btn_header_batch = QPushButton("📦 Batch" if self.lang == "km" else "📦 Batch")
+        self.btn_header_batch.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_header_batch.setToolTip(
+            "ដំណើរការវីដេអូទាំង Folder ដោយស្វ័យប្រវត្តិ (Ctrl+Shift+B)" if self.lang == "km" else "Batch process full video folder (Ctrl+Shift+B)"
+        )
+        self.btn_header_batch.setStyleSheet("""
+            QPushButton {
+                background-color: #162036;
+                color: #93C5FD;
+                border: 1px solid #243350;
+                border-radius: 8px;
+                padding: 4px 10px;
+                font-weight: 600;
+                font-size: 9pt;
+            }
+            QPushButton:hover { background-color: #1E2D4D; border-color: #3B82F6; color: #FFFFFF; }
+        """)
+        self.btn_header_batch.clicked.connect(self._open_batch_dialog)
+        h_layout.addWidget(self.btn_header_batch)
+
+        # Notification Bell (anchored popover trigger)
+        self.btn_notifications = QPushButton("🔔")
+        self.btn_notifications.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_notifications.setToolTip("មជ្ឈមណ្ឌលដំណឹង" if self.lang == "km" else "Notifications")
+        self.btn_notifications.clicked.connect(self._open_notification_center)
+        h_layout.addWidget(self.btn_notifications)
+
+        # Settings gear button
+        self.btn_header_settings = QPushButton("⚙")
+        self.btn_header_settings.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_header_settings.setToolTip("ការកំណត់កម្មវិធី" if self.lang == "km" else "Settings")
+        self.btn_header_settings.clicked.connect(self._open_settings)
+        h_layout.addWidget(self.btn_header_settings)
+
+        # Clean language selector dropdown
+        self.cb_ui_lang = QComboBox()
+        self.cb_ui_lang.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        self.cb_ui_lang.addItem("ខ្មែរ", "km")
+        self.cb_ui_lang.addItem("English", "en")
+        lang_idx = self.cb_ui_lang.findData(self.lang)
+        if lang_idx >= 0:
+            self.cb_ui_lang.setCurrentIndex(lang_idx)
+        self.cb_ui_lang.setToolTip("ភាសាកម្មវិធី / App Language")
+        self.cb_ui_lang.currentIndexChanged.connect(self._on_ui_lang_combo_changed)
+        h_layout.addWidget(self.cb_ui_lang)
+
+        self._update_stepper_states()
+        return header
+
+    def _open_header_overflow_menu(self):
+        menu = QMenu(self)
+        for idx, (km_lbl, en_lbl, icon_ch, km_tip, en_tip) in enumerate(self._step_meta):
+            lbl = km_lbl if self.lang == "km" else en_lbl
+            menu.addAction(f"{icon_ch} {lbl}", lambda i=idx: self._on_stepper_clicked(i))
+        menu.addSeparator()
+        menu.addAction("📤 " + ("Export SRT ចិន" if self.lang == "km" else "Export Chinese SRT"), self._export_zh_srt_chatgpt)
+        menu.addAction("📥 " + ("នាំចូល SRT" if self.lang == "km" else "Import SRT"), self._import_srt_external)
+        menu.addSeparator()
+        menu.addAction("📊 " + ("របាយការណ៍" if self.lang == "km" else "Sync Report"), self._show_sync_report)
+        menu.addAction("📦 Batch", self._open_batch_dialog)
+        menu.addAction("⚙ " + ("ការកំណត់" if self.lang == "km" else "Settings"), self._open_settings)
+        menu.exec(self.btn_header_more.mapToGlobal(self.btn_header_more.rect().bottomLeft()))
+
+    def _update_responsive_header(self):
+        """Switch header pills to compact icon mode <1280px and move extra pills to '⋯' on very narrow screens."""
+        if not hasattr(self, "step_buttons") or not self.step_buttons:
+            return
+        w = self.width()
+        compact = w < 1280
+        very_narrow = w < 900
+
+        for idx, btn in enumerate(self.step_buttons):
+            km_lbl, en_lbl, icon_ch, km_tip, en_tip = self._step_meta[idx]
+            full_lbl = km_lbl if self.lang == "km" else en_lbl
+            btn.setToolTip(f"{full_lbl} — {km_tip if self.lang == 'km' else en_tip}")
+            if compact:
+                num = ["①", "②", "③", "④", "⑤", "⑥"][idx]
+                btn.setText(f"{num} {icon_ch}")
+            else:
+                btn.setText(full_lbl)
+            btn.setVisible(not (very_narrow and idx >= 4))
+
+        for idx, sep in enumerate(getattr(self, "step_seps", [])):
+            sep.setVisible(not (very_narrow and idx >= 3))
+
+        if hasattr(self, "btn_header_more"):
+            self.btn_header_more.setVisible(compact)
+
+        if hasattr(self, "btn_export_zh_srt"):
+            self.btn_export_zh_srt.setText(
+                ("📤 SRT" if compact else ("📤 Export SRT ចិន" if self.lang == "km" else "📤 Export ZH SRT"))
+            )
+        if hasattr(self, "btn_import_srt"):
+            self.btn_import_srt.setText(
+                ("📥 SRT" if compact else ("📥 នាំចូល SRT" if self.lang == "km" else "📥 Import SRT"))
+            )
+        self._reflow_engine_bar()
+
+    def _on_stepper_clicked(self, idx: int):
+        actions = [
+            self._import_video,
+            self._run_transcription,
+            self._run_translation,
+            self._run_tts_generation,
+            self._run_preview_result,
+            self._export_dubbed,
+        ]
+        if 0 <= idx < len(actions):
+            actions[idx]()
+
+    def _update_stepper_states(self):
+        """Update visual step state: done / active / locked based on project progress."""
+        if not hasattr(self, "step_buttons") or len(self.step_buttons) < 6:
+            return
+        has_video = bool(self.project.video_path and os.path.exists(self.project.video_path))
+        segs = self.project.segments or []
+        has_src = any(bool(s.text_src and s.text_src.strip()) for s in segs)
+        has_trans = any(bool(s.text_km and s.text_km.strip()) for s in segs)
+        has_tts = any(bool(s.tts_file and os.path.exists(s.tts_file)) for s in segs)
+        has_preview = bool(getattr(self.project.settings, "result_video_path", "") and os.path.exists(self.project.settings.result_video_path))
+
+        done_flags = [has_video, has_src, has_trans, has_tts, has_preview, has_preview]
+        # First incomplete step becomes active
+        active_idx = 5
+        for i in range(6):
+            if not done_flags[i]:
+                active_idx = i
+                break
+
+        styles = {
+            "done": "QPushButton#stepPill { background-color: #132A23; color: #34D399; border: 1px solid #22C55E; border-radius: 14px; padding: 4px 10px; font-weight: 600; font-size: 8.5pt; }",
+            "active": "QPushButton#stepPill { background-color: #2D8CFF; color: #FFFFFF; border: 1px solid #60A5FA; border-radius: 14px; padding: 4px 11px; font-weight: bold; font-size: 8.5pt; }",
+            "locked": "QPushButton#stepPill { background-color: #162036; color: #9AA8C4; border: 1px solid #243350; border-radius: 14px; padding: 4px 10px; font-weight: 500; font-size: 8.5pt; } QPushButton#stepPill:hover { border-color: #2D8CFF; color: #E6ECF8; }",
+        }
+        for i, btn in enumerate(self.step_buttons):
+            if i == active_idx:
+                state = "active"
+            elif done_flags[i]:
+                state = "done"
+            else:
+                state = "locked"
+            btn.setProperty("stepState", state)
+            btn.setStyleSheet(styles[state])
+
+    def _refresh_header_labels(self):
+        self._update_responsive_header()
+        if hasattr(self, "lbl_src_mode"):
+            self.lbl_src_mode.setText("ប្រភព:" if self.lang == "km" else "Source:")
+        if hasattr(self, "lbl_target_lang"):
+            self.lbl_target_lang.setText("ភាសា:" if self.lang == "km" else "Target:")
+        if hasattr(self, "lbl_trans_prov"):
+            self.lbl_trans_prov.setText("បកប្រែ:" if self.lang == "km" else "Engine:")
+        if hasattr(self, "btn_cancel_task"):
+            self.btn_cancel_task.setText("✖ បោះបង់" if self.lang == "km" else "✖ Cancel")
+        self._populate_trans_providers()
+
+    def _populate_engine_bar(self, bar):
+        """Populate engine selectors & SRT tools cleanly with responsive reflow so combos never clip."""
+        from PySide6.QtWidgets import QGridLayout
+        outer = bar if isinstance(bar, QVBoxLayout) else bar.layout()
+        if outer is None:
+            outer = QVBoxLayout(bar)
+            outer.setContentsMargins(0, 0, 0, 0)
+            outer.setSpacing(6)
+
+        self._engine_grid = QGridLayout()
+        self._engine_grid.setContentsMargins(0, 0, 0, 0)
+        self._engine_grid.setSpacing(6)
+
+        # Group A: Source mode + OCR opts
+        self._eng_grp_src = QWidget()
+        l_src = QHBoxLayout(self._eng_grp_src)
+        l_src.setContentsMargins(0, 0, 0, 0)
+        l_src.setSpacing(6)
+        self.lbl_src_mode = QLabel("ប្រភព:" if self.lang == "km" else "Source:")
+        self.lbl_src_mode.setStyleSheet("color: #9AA8C4; font-size: 9pt; font-weight: 600;")
+        l_src.addWidget(self.lbl_src_mode)
 
         self.cb_src_mode = QComboBox()
-        self.cb_src_mode.setMinimumWidth(165)
-        self.cb_src_mode.setToolTip("ប្រភពអត្ថបទចិន៖ Auto (OCR បើមាន hardsubs), OCR អក្សរក្នុងវិដេអូ, ឬ Whisper")
-        self.cb_src_mode.setStyleSheet("""
-            QComboBox {
-                background-color: #0f172a;
-                color: #34d399;
-                border: 1px solid #059669;
-                border-radius: 6px;
-                padding: 5px 10px;
-                font-weight: bold;
-                font-size: 11px;
-            }
-            QComboBox:hover { border-color: #6ee7b7; }
-        """)
-        self.cb_src_mode.addItem("🤖 Auto (OCR/Whisper)" if self.lang == "km" else "🤖 Auto (OCR/Whisper)", "auto")
-        self.cb_src_mode.addItem("👁️ OCR អក្សរក្នុងវិដេអូ" if self.lang == "km" else "👁️ Video OCR", "ocr")
-        self.cb_src_mode.addItem("🎙️ Whisper (សំឡេង)" if self.lang == "km" else "🎙️ Whisper (Audio)", "whisper")
+        self.cb_src_mode.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        self.cb_src_mode.setToolTip("ប្រភពអត្ថបទចិន៖ Auto / OCR / Whisper")
+        self.cb_src_mode.addItem("🤖 Auto (OCR/Whisper)", "auto")
+        self.cb_src_mode.addItem("👁️ Video OCR", "ocr")
+        self.cb_src_mode.addItem("🎙️ Whisper", "whisper")
+        self.cb_src_mode.addItem("💬 ChatGPT / OpenAI", "openai")
         cur_src_mode = getattr(self.project.settings, "src_mode", "auto") or "auto"
         sm_idx = self.cb_src_mode.findData(cur_src_mode)
         if sm_idx >= 0:
@@ -318,43 +585,25 @@ class MainWindow(QMainWindow):
         self.cb_src_mode.currentIndexChanged.connect(
             lambda idx: setattr(self.project.settings, "src_mode", self.cb_src_mode.itemData(idx))
         )
-        toolbar.addWidget(self.cb_src_mode)
+        l_src.addWidget(self.cb_src_mode)
 
-        self.btn_ocr_opts = QPushButton("⚙️ OCR")
-        self.btn_ocr_opts.setToolTip("កំណត់ Engine OCR (RapidOCR/PaddleOCR), FPS, ទទួលពេលវេលា OCR និងតំបន់ ROI")
-        self.btn_ocr_opts.setStyleSheet("""
-            QPushButton {
-                background-color: #1e293b;
-                color: #34d399;
-                border: 1px solid #059669;
-                border-radius: 6px;
-                padding: 5px 8px;
-                font-weight: bold;
-                font-size: 11px;
-            }
-            QPushButton:hover { background-color: #064e3b; }
-        """)
+        self.btn_ocr_opts = QPushButton("⚙ OCR")
+        self.btn_ocr_opts.setToolTip("កំណត់ Engine OCR (RapidOCR/PaddleOCR), FPS និងតំបន់ ROI")
         self.btn_ocr_opts.clicked.connect(self._open_ocr_options_menu)
-        toolbar.addWidget(self.btn_ocr_opts)
+        l_src.addWidget(self.btn_ocr_opts)
 
-        # Target Language Selector (Multi-Language Translate & TTS Voice)
+        # Group B: Target language
+        self._eng_grp_lang = QWidget()
+        l_lang = QHBoxLayout(self._eng_grp_lang)
+        l_lang.setContentsMargins(0, 0, 0, 0)
+        l_lang.setSpacing(6)
+        self.lbl_target_lang = QLabel("ភាសា:" if self.lang == "km" else "Target:")
+        self.lbl_target_lang.setStyleSheet("color: #9AA8C4; font-size: 9pt; font-weight: 600;")
+        l_lang.addWidget(self.lbl_target_lang)
+
         self.cb_target_lang = QComboBox()
-        self.cb_target_lang.setMinimumWidth(185)
-        self.cb_target_lang.setToolTip("ជ្រើសរើសភាសាបកប្រែ និងសំឡេង AI (Select Target Translation & AI Voice Language)")
-        self.cb_target_lang.setStyleSheet("""
-            QComboBox {
-                background-color: #0f172a;
-                color: #38bdf8;
-                border: 1px solid #0284c7;
-                border-radius: 6px;
-                padding: 5px 14px;
-                font-weight: bold;
-                font-size: 12px;
-            }
-            QComboBox:hover {
-                border-color: #7dd3fc;
-            }
-        """)
+        self.cb_target_lang.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        self.cb_target_lang.setToolTip("ជ្រើសរើសភាសាបកប្រែ និងសំឡេង AI")
         for t_code, t_label, _, _, _ in TARGET_LANGUAGES:
             self.cb_target_lang.addItem(t_label, t_code)
         cur_tlang = getattr(self.project.settings, "target_language", "km") or "km"
@@ -362,232 +611,212 @@ class MainWindow(QMainWindow):
         if t_idx >= 0:
             self.cb_target_lang.setCurrentIndex(t_idx)
         self.cb_target_lang.currentIndexChanged.connect(self._on_target_lang_changed)
-        toolbar.addWidget(self.cb_target_lang)
+        l_lang.addWidget(self.cb_target_lang)
 
-        # Translation Engine Selector (Google Translate vs Gemini 1.5 Flash)
+        # Group C: Translation provider
+        self._eng_grp_trans = QWidget()
+        l_tr = QHBoxLayout(self._eng_grp_trans)
+        l_tr.setContentsMargins(0, 0, 0, 0)
+        l_tr.setSpacing(6)
+        self.lbl_trans_prov = QLabel("បកប្រែ:" if self.lang == "km" else "Engine:")
+        self.lbl_trans_prov.setStyleSheet("color: #9AA8C4; font-size: 9pt; font-weight: 600;")
+        l_tr.addWidget(self.lbl_trans_prov)
+
         self.cb_trans_provider = QComboBox()
-        self.cb_trans_provider.setMinimumWidth(165)
-        self.cb_trans_provider.setToolTip("ជ្រើសរើស Engine បកប្រែ៖ Google Translate (ចាស់/ឥតគិតថ្លៃ) ឬ Gemini 1.5 Flash (AI ភាពយន្ត)")
-        self.cb_trans_provider.setStyleSheet("""
-            QComboBox {
-                background-color: #0f172a;
-                color: #c084fc;
-                border: 1px solid #7e22ce;
-                border-radius: 6px;
-                padding: 5px 10px;
-                font-weight: bold;
-                font-size: 11px;
-            }
-            QComboBox:hover {
-                border-color: #d8b4fe;
-            }
-        """)
+        self.cb_trans_provider.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        self.cb_trans_provider.setToolTip("ជ្រើសរើស Engine បកប្រែ៖ Google ឬ Gemini 1.5 Flash")
         self._populate_trans_providers()
         self.cb_trans_provider.currentIndexChanged.connect(self._on_trans_provider_changed)
-        toolbar.addWidget(self.cb_trans_provider)
+        l_tr.addWidget(self.cb_trans_provider)
 
-        # Step 2: Translate
-        self.act_translate = toolbar.addAction("🌐 ២. បកប្រែ" if self.lang == "km" else "🌐 2. Translate", self._run_translation)
-        self.act_translate.setToolTip(s["btn_translate_all"])
+        # Group D: SRT buttons
+        self._eng_grp_srt = QWidget()
+        l_srt = QHBoxLayout(self._eng_grp_srt)
+        l_srt.setContentsMargins(0, 0, 0, 0)
+        l_srt.setSpacing(6)
+        l_srt.addStretch(1)
+        self.btn_export_zh_srt = QPushButton("📤 Export SRT ចិន" if self.lang == "km" else "📤 Export ZH SRT")
+        self.btn_export_zh_srt.setToolTip("Export SRT ចិន សម្រាប់បកប្រែក្នុង ChatGPT/ឧបករណ៍ផ្សេង")
+        self.btn_export_zh_srt.clicked.connect(self._export_zh_srt_chatgpt)
+        l_srt.addWidget(self.btn_export_zh_srt)
 
-        self.act_export_zh_srt = toolbar.addAction("📤 Export SRT ចិន" if self.lang == "km" else "📤 Export ZH SRT", self._export_zh_srt_chatgpt)
-        self.act_export_zh_srt.setToolTip("Export SRT ចិន (សម្រាប់បកប្រែក្នុង ChatGPT/ឧបករណ៍ផ្សេង)")
+        self.btn_import_srt = QPushButton("📥 នាំចូល SRT" if self.lang == "km" else "📥 Import SRT")
+        self.btn_import_srt.setToolTip("នាំចូល SRT ដែលបានបកប្រែរួចមកជំនួសក្នុងតារាង")
+        self.btn_import_srt.clicked.connect(self._import_srt_external)
+        l_srt.addWidget(self.btn_import_srt)
 
-        self.act_import_srt = toolbar.addAction("📥 នាំចូល SRT" if self.lang == "km" else "📥 Import SRT", self._import_srt_external)
-        self.act_import_srt.setToolTip("នាំចូល SRT ខ្មែរដែលបានបកប្រែរួចមកជំនួសក្នុងតារាង")
+        outer.addLayout(self._engine_grid)
+        self._reflow_engine_bar()
 
-        # Step 3: Generate Voices
-        self.act_tts = toolbar.addAction("🗣️ ៣. សំឡេង AI" if self.lang == "km" else "🗣️ 3. Voices", self._run_tts_generation)
-        self.act_tts.setToolTip(s["btn_generate_tts"])
+    def _reflow_engine_bar(self):
+        """Place engine groups in 2 rows when wide, or reflow neatly onto 3-4 rows when narrow so zero text truncates."""
+        if not hasattr(self, "_engine_grid"):
+            return
+        while self._engine_grid.count():
+            self._engine_grid.takeAt(0)
 
-        # Step 4: Auto Time-Sync
-        self.act_sync = toolbar.addAction("⏱️ ៤. តម្រឹម" if self.lang == "km" else "⏱️ 4. Sync", self._run_time_sync)
-        self.act_sync.setToolTip(s["btn_auto_sync"])
+        avail_w = self.segment_table.width() if hasattr(self, "segment_table") and self.segment_table.width() > 100 else max(640, int(self.width() * 0.62))
+        w_a = self._eng_grp_src.sizeHint().width()
+        w_b = self._eng_grp_lang.sizeHint().width()
+        w_c = self._eng_grp_trans.sizeHint().width()
+        w_d = self._eng_grp_srt.sizeHint().width()
 
-        # Step 5: Fast Preview Result (BEFORE EXPORT)
-        self.act_preview = toolbar.addAction("👁️ Preview", self._run_preview_result)
-        self.act_preview.setToolTip(s.get("btn_preview_dubbed", "មើលលទ្ធផលសាកល្បង") + " (Ctrl+P)")
-
-        # Step 6: Export
-        self.act_export = toolbar.addAction("🚀 ៥. នាំចេញ" if self.lang == "km" else "🚀 5. Export", self._export_dubbed)
-        self.act_export.setToolTip(s["btn_export_all"])
-
-        toolbar.addSeparator()
-
-        # Sync Report, Batch & Settings
-        act_rep = toolbar.addAction("📊 របាយការណ៍" if self.lang == "km" else "📊 Report", self._show_sync_report)
-        act_rep.setToolTip(s["tab_sync_report"])
-
-        act_bat = toolbar.addAction("📦 Batch", self._open_batch_dialog)
-        act_bat.setToolTip(s["batch_queue"])
-
-        act_set = toolbar.addAction("⚙️ កំណត់" if self.lang == "km" else "⚙️ Settings", self._open_settings)
-        act_set.setToolTip(s["settings"])
-
-        toolbar.addSeparator()
-
-        # Bilingual Toggle Button
-        self.btn_lang = QPushButton(s["language_toggle"])
-        self.btn_lang.setMinimumWidth(105)
-        self.btn_lang.setStyleSheet("background-color: #0369a1; color: white; font-weight: bold; padding: 6px 14px; border-radius: 6px;")
-        self.btn_lang.clicked.connect(self._toggle_language)
-        toolbar.addWidget(self.btn_lang)
+        if w_a + w_b + 12 <= avail_w and w_c + w_d + 12 <= avail_w:
+            # 2-row balanced desktop layout
+            self._engine_grid.addWidget(self._eng_grp_src, 0, 0, Qt.AlignmentFlag.AlignLeft)
+            self._engine_grid.addWidget(self._eng_grp_lang, 0, 1, Qt.AlignmentFlag.AlignLeft)
+            self._engine_grid.addWidget(self._eng_grp_trans, 1, 0, Qt.AlignmentFlag.AlignLeft)
+            self._engine_grid.addWidget(self._eng_grp_srt, 1, 1, Qt.AlignmentFlag.AlignRight)
+            self._engine_grid.setColumnStretch(0, 0)
+            self._engine_grid.setColumnStretch(1, 1)
+        elif w_c + w_d + 12 <= avail_w:
+            # 3-row medium width
+            self._engine_grid.addWidget(self._eng_grp_src, 0, 0, 1, 2, Qt.AlignmentFlag.AlignLeft)
+            self._engine_grid.addWidget(self._eng_grp_lang, 1, 0, 1, 2, Qt.AlignmentFlag.AlignLeft)
+            self._engine_grid.addWidget(self._eng_grp_trans, 2, 0, Qt.AlignmentFlag.AlignLeft)
+            self._engine_grid.addWidget(self._eng_grp_srt, 2, 1, Qt.AlignmentFlag.AlignRight)
+            self._engine_grid.setColumnStretch(0, 0)
+            self._engine_grid.setColumnStretch(1, 1)
+        else:
+            # Stacked compact rows
+            self._engine_grid.addWidget(self._eng_grp_src, 0, 0, Qt.AlignmentFlag.AlignLeft)
+            self._engine_grid.addWidget(self._eng_grp_lang, 1, 0, Qt.AlignmentFlag.AlignLeft)
+            self._engine_grid.addWidget(self._eng_grp_trans, 2, 0, Qt.AlignmentFlag.AlignLeft)
+            self._engine_grid.addWidget(self._eng_grp_srt, 3, 0, Qt.AlignmentFlag.AlignLeft)
+            self._engine_grid.setColumnStretch(0, 1)
+            self._engine_grid.setColumnStretch(1, 0)
 
     def _create_mixing_panel(self) -> QWidget:
         s = STRINGS[self.lang]
         panel = QWidget()
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(10, 8, 10, 8)
-        layout.setSpacing(6)
+        layout.setSpacing(8)
 
-        # 1. Dedicated Original Voice (Vocals) Volume
-        vbox_orig = QVBoxLayout()
-        vbox_orig.setSpacing(2)
-        row_orig_hdr = QHBoxLayout()
-        self.lbl_orig_title = QLabel(s.get("original_voice_volume", "Original Voice Volume"))
-        self.lbl_orig_title.setStyleSheet("font-weight: 600; color: #cbd5e1; font-size: 11px;")
         orig_val_pct = int(self.project.settings.original_voice_volume * 100)
-        self.lbl_orig_val = QLabel(f"{orig_val_pct}%" if orig_val_pct > 0 and not self.project.settings.mute_original else "0% (OFF)")
-        self.lbl_orig_val.setStyleSheet("background: #1e293b; color: #38bdf8; font-weight: bold; padding: 1px 6px; border-radius: 3px; font-size: 11px;")
-        row_orig_hdr.addWidget(self.lbl_orig_title)
-        row_orig_hdr.addStretch()
-        row_orig_hdr.addWidget(self.lbl_orig_val)
-        vbox_orig.addLayout(row_orig_hdr)
+        orig_on = (not self.project.settings.mute_original) and orig_val_pct > 0
+        bg_val_pct = int(self.project.settings.background_volume * 100)
+        bg_on = (not self.project.settings.mute_original or self.project.settings.keep_background) and bg_val_pct > 0
+
+        # Row 1: [switch] Original Voice + slider
+        row_orig = QHBoxLayout()
+        row_orig.setSpacing(6)
+        self.sw_orig_voice = ToggleSwitch("សំឡេងដើម" if self.lang == "km" else "Original Voice")
+        self.sw_orig_voice.setMinimumWidth(110)
+        self.sw_orig_voice.setChecked(orig_on)
+        self.sw_orig_voice.toggled.connect(self._on_orig_voice_switch_toggled)
+        row_orig.addWidget(self.sw_orig_voice)
 
         self.slider_orig_vol = QSlider(Qt.Orientation.Horizontal)
         self.slider_orig_vol.setRange(0, 150)
-        self.slider_orig_vol.setValue(0 if self.project.settings.mute_original else orig_val_pct)
-        self.slider_orig_vol.setEnabled(not self.project.settings.mute_original)
+        self.slider_orig_vol.setValue(orig_val_pct if orig_on else 0)
+        self.slider_orig_vol.setEnabled(orig_on)
         self.slider_orig_vol.valueChanged.connect(self._on_orig_vol_changed)
-        vbox_orig.addWidget(self.slider_orig_vol)
-        layout.addLayout(vbox_orig)
+        row_orig.addWidget(self.slider_orig_vol, 1)
 
-        # 2. Dedicated Background (Music & Sound Effects) Volume
-        vbox_bg = QVBoxLayout()
-        vbox_bg.setSpacing(2)
-        row_bg_hdr = QHBoxLayout()
-        self.lbl_bg_title = QLabel(s.get("background_volume", "Background (Music/SFX) Volume"))
-        self.lbl_bg_title.setStyleSheet("font-weight: 600; color: #cbd5e1; font-size: 11px;")
-        bg_val_pct = int(self.project.settings.background_volume * 100)
-        bg_active = (not self.project.settings.mute_original or self.project.settings.keep_background) and bg_val_pct > 0
-        self.lbl_bg_val = QLabel(f"{bg_val_pct}%" if bg_active else "0% (OFF)")
-        self.lbl_bg_val.setStyleSheet("background: #1e293b; color: #f59e0b; font-weight: bold; padding: 1px 6px; border-radius: 3px; font-size: 11px;")
-        row_bg_hdr.addWidget(self.lbl_bg_title)
-        row_bg_hdr.addStretch()
-        row_bg_hdr.addWidget(self.lbl_bg_val)
-        vbox_bg.addLayout(row_bg_hdr)
+        self.lbl_orig_val = QLabel(f"{orig_val_pct}%" if orig_on else "OFF")
+        self.lbl_orig_val.setMinimumWidth(38)
+        self.lbl_orig_val.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.lbl_orig_val.setStyleSheet("color: #38bdf8; font-weight: bold; font-size: 8.5pt;")
+        row_orig.addWidget(self.lbl_orig_val)
+        layout.addLayout(row_orig)
+
+        # Row 2: [switch] Music / SFX + slider
+        row_bg = QHBoxLayout()
+        row_bg.setSpacing(6)
+        self.sw_bg_music = ToggleSwitch("ភ្លេង / SFX" if self.lang == "km" else "Music / SFX")
+        self.sw_bg_music.setMinimumWidth(110)
+        self.sw_bg_music.setChecked(bg_on)
+        self.sw_bg_music.toggled.connect(self._on_bg_music_switch_toggled)
+        row_bg.addWidget(self.sw_bg_music)
 
         self.slider_bg_vol = QSlider(Qt.Orientation.Horizontal)
         self.slider_bg_vol.setRange(0, 150)
-        self.slider_bg_vol.setValue(bg_val_pct if bg_active else 0)
-        self.slider_bg_vol.setEnabled(bg_active or self.project.settings.keep_background)
+        self.slider_bg_vol.setValue(bg_val_pct if bg_on else 0)
+        self.slider_bg_vol.setEnabled(bg_on)
         self.slider_bg_vol.valueChanged.connect(self._on_bg_vol_changed)
-        vbox_bg.addWidget(self.slider_bg_vol)
-        layout.addLayout(vbox_bg)
+        row_bg.addWidget(self.slider_bg_vol, 1)
 
-        # 3. AI Dubbed Voice Volume
-        vbox_dub = QVBoxLayout()
-        vbox_dub.setSpacing(2)
-        row_dub_hdr = QHBoxLayout()
-        self.lbl_dub_title = QLabel(s.get("ai_voice_volume", "AI Voice Volume"))
-        self.lbl_dub_title.setStyleSheet("font-weight: 600; color: #cbd5e1; font-size: 11px;")
-        self.lbl_dub_val = QLabel(f"{int(self.project.settings.dubbed_volume * 100)}%")
-        self.lbl_dub_val.setStyleSheet("background: #1e293b; color: #a855f7; font-weight: bold; padding: 1px 6px; border-radius: 3px; font-size: 11px;")
-        row_dub_hdr.addWidget(self.lbl_dub_title)
-        row_dub_hdr.addStretch()
-        row_dub_hdr.addWidget(self.lbl_dub_val)
-        vbox_dub.addLayout(row_dub_hdr)
+        self.lbl_bg_val = QLabel(f"{bg_val_pct}%" if bg_on else "OFF")
+        self.lbl_bg_val.setMinimumWidth(38)
+        self.lbl_bg_val.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.lbl_bg_val.setStyleSheet("color: #F59E0B; font-weight: bold; font-size: 8.5pt;")
+        row_bg.addWidget(self.lbl_bg_val)
+        layout.addLayout(row_bg)
+
+        # Row 3: AI Voice slider
+        row_dub = QHBoxLayout()
+        row_dub.setSpacing(6)
+        self.lbl_dub_title = QLabel("សំឡេង AI" if self.lang == "km" else "AI Voice")
+        self.lbl_dub_title.setMinimumWidth(110)
+        self.lbl_dub_title.setStyleSheet("color: #E6ECF8; font-weight: 600; font-size: 9pt;")
+        row_dub.addWidget(self.lbl_dub_title)
 
         self.slider_dub_vol = QSlider(Qt.Orientation.Horizontal)
         self.slider_dub_vol.setRange(0, 200)
         self.slider_dub_vol.setValue(int(self.project.settings.dubbed_volume * 100))
         self.slider_dub_vol.valueChanged.connect(self._on_dub_vol_changed)
-        vbox_dub.addWidget(self.slider_dub_vol)
-        layout.addLayout(vbox_dub)
+        row_dub.addWidget(self.slider_dub_vol, 1)
 
-        # 4. AI Voice Speed (ល្បឿនសំឡេង AI និយាយ)
-        vbox_spd = QVBoxLayout()
-        vbox_spd.setSpacing(2)
-        row_spd_hdr = QHBoxLayout()
-        self.lbl_spd_title = QLabel(s.get("ai_voice_speed", "AI Voice Speed"))
-        self.lbl_spd_title.setStyleSheet("font-weight: 600; color: #cbd5e1; font-size: 11px;")
-        
-        init_spd = getattr(self.project.settings, "ai_voice_speed", 1.05)
-        self.lbl_spd_val = QLabel(f"{init_spd:.2f}x")
-        self.lbl_spd_val.setStyleSheet("background: #064e3b; color: #34d399; font-weight: bold; padding: 1px 6px; border-radius: 3px; font-size: 11px;")
-        
-        self.btn_apply_spd_all = QPushButton(s.get("btn_apply_speed_all", "⚡ អនុវត្តគ្រប់វគ្គ"))
-        self.btn_apply_spd_all.setStyleSheet("background-color: #047857; color: white; font-size: 10px; padding: 2px 6px; border-radius: 3px; font-weight: bold;")
-        self.btn_apply_spd_all.setToolTip("កំណត់ល្បឿននេះទៅគ្រប់វគ្គទាំងអស់ (Apply this speed to all segments)")
-        self.btn_apply_spd_all.clicked.connect(self._apply_global_speed_to_all)
-        
-        row_spd_hdr.addWidget(self.lbl_spd_title)
-        row_spd_hdr.addStretch()
-        row_spd_hdr.addWidget(self.lbl_spd_val)
-        row_spd_hdr.addWidget(self.btn_apply_spd_all)
-        vbox_spd.addLayout(row_spd_hdr)
+        self.lbl_dub_val = QLabel(f"{int(self.project.settings.dubbed_volume * 100)}%")
+        self.lbl_dub_val.setMinimumWidth(38)
+        self.lbl_dub_val.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.lbl_dub_val.setStyleSheet("color: #2D8CFF; font-weight: bold; font-size: 8.5pt;")
+        row_dub.addWidget(self.lbl_dub_val)
+        layout.addLayout(row_dub)
 
-        row_spd_controls = QHBoxLayout()
-        self.slider_ai_speed = QSlider(Qt.Orientation.Horizontal)
-        self.slider_ai_speed.setRange(75, 150)
-        self.slider_ai_speed.setValue(int(init_spd * 100))
-        self.slider_ai_speed.valueChanged.connect(self._on_ai_speed_changed)
-        row_spd_controls.addWidget(self.slider_ai_speed)
-
-        # Quick preset buttons for instant 1-click selection
-        for spd_preset in [0.90, 1.00, 1.05, 1.15, 1.25]:
-            btn_p = QPushButton(f"{spd_preset:.2f}x" if spd_preset != 1.0 else "1.0x")
-            btn_p.setFixedWidth(36)
-            btn_p.setStyleSheet("background: #1e293b; color: #94a3b8; font-size: 10px; padding: 2px; border-radius: 3px;")
-            btn_p.clicked.connect(lambda checked, val=spd_preset: self.slider_ai_speed.setValue(int(val * 100)))
-            row_spd_controls.addWidget(btn_p)
-
-        vbox_spd.addLayout(row_spd_controls)
-        layout.addLayout(vbox_spd)
-
-        # 5. Checkboxes Row 1: Mute & Keep Background Controls & Single Status Badge
-        row_checks_1 = QHBoxLayout()
-        row_checks_1.setSpacing(8)
-        self.chk_mute_orig = QCheckBox(s.get("mute_original", "Mute Original Entirely"))
-        self.chk_mute_orig.setStyleSheet("color: #f87171; font-weight: bold; font-size: 11px;")
-        self.chk_mute_orig.setChecked(self.project.settings.mute_original)
-        self.chk_mute_orig.toggled.connect(self._on_mute_original_toggled)
-        row_checks_1.addWidget(self.chk_mute_orig)
-
-        self.chk_keep_bg = QCheckBox(s.get("keep_background", "Keep Background"))
-        self.chk_keep_bg.setStyleSheet("color: #38bdf8; font-size: 11px;")
-        self.chk_keep_bg.setChecked(self.project.settings.keep_background)
-        self.chk_keep_bg.toggled.connect(self._on_keep_bg_toggled)
-        row_checks_1.addWidget(self.chk_keep_bg)
-
+        # Concise status badge row
+        row_status = QHBoxLayout()
         self.lbl_mute_summary = QLabel()
-        self.lbl_mute_summary.setStyleSheet("background: #0f172a; color: #94a3b8; font-weight: bold; padding: 1px 6px; border-radius: 3px; font-size: 10px;")
-        row_checks_1.addStretch()
-        row_checks_1.addWidget(self.lbl_mute_summary)
-        layout.addLayout(row_checks_1)
+        row_status.addWidget(self.lbl_mute_summary)
+        row_status.addStretch(1)
+        layout.addLayout(row_status)
 
-        # 6. Checkboxes Row 2: Subtitle Burn & Chinese Subtitle Masking
-        row_checks_2 = QHBoxLayout()
-        row_checks_2.setSpacing(8)
-        self.chk_burn_sub = QCheckBox(s.get("burn_subtitles", "Burn Subtitles"))
-        self.chk_burn_sub.setStyleSheet("color: #94a3b8; font-size: 11px;")
+        # Speed SegmentedControl + Auto-fit
+        row_spd = QHBoxLayout()
+        row_spd.setSpacing(6)
+        self.lbl_spd_title = QLabel("ល្បឿន:" if self.lang == "km" else "Speed:")
+        self.lbl_spd_title.setStyleSheet("color: #9AA8C4; font-size: 8.5pt; font-weight: 600;")
+        row_spd.addWidget(self.lbl_spd_title)
+
+        init_spd = getattr(self.project.settings, "ai_voice_speed", 1.05)
+        self.seg_ai_speed = SegmentedControl([
+            ("0.9x", 0.90),
+            ("1.0x", 1.00),
+            ("1.05x", 1.05),
+            ("1.15x", 1.15),
+            ("1.25x", 1.25),
+        ])
+        nearest = min([0.90, 1.00, 1.05, 1.15, 1.25], key=lambda v: abs(v - init_spd))
+        self.seg_ai_speed.set_value(nearest, emit=False)
+        self.seg_ai_speed.selection_changed.connect(self._on_speed_segment_changed)
+        row_spd.addWidget(self.seg_ai_speed, 1)
+
+        self.btn_apply_spd_all = QPushButton("⚡ Auto-fit" if self.lang == "km" else "⚡ Auto-fit")
+        self.btn_apply_spd_all.setToolTip("អនុវត្តល្បឿននេះទៅគ្រប់វគ្គទាំងអស់" if self.lang == "km" else "Apply selected speed to all segments")
+        self.btn_apply_spd_all.clicked.connect(self._apply_global_speed_to_all)
+        row_spd.addWidget(self.btn_apply_spd_all)
+        layout.addLayout(row_spd)
+
+        # Output Switches + កំណត់...
+        row_out = QHBoxLayout()
+        row_out.setSpacing(8)
+        self.chk_burn_sub = ToggleSwitch("ដាក់អក្សរខ្មែរ" if self.lang == "km" else "Burn Subtitles")
         self.chk_burn_sub.setChecked(self.project.settings.burn_subtitles)
-        self.chk_burn_sub.toggled.connect(lambda val: setattr(self.project.settings, "burn_subtitles", val))
-        row_checks_2.addWidget(self.chk_burn_sub)
+        self.chk_burn_sub.toggled.connect(self._on_burn_sub_toggled)
+        row_out.addWidget(self.chk_burn_sub)
 
-        self.chk_mask_sub = QCheckBox(s.get("mask_subtitles", "Mask Original Subtitles"))
-        self.chk_mask_sub.setStyleSheet("color: #c084fc; font-size: 11px;")
+        self.chk_mask_sub = ToggleSwitch("បិទបាំងអក្សរចិន" if self.lang == "km" else "Mask Subtitles")
         self.chk_mask_sub.setChecked(getattr(self.project.settings, "mask_subtitles", True))
-        self.chk_mask_sub.toggled.connect(lambda val: setattr(self.project.settings, "mask_subtitles", val))
-        row_checks_2.addWidget(self.chk_mask_sub)
+        self.chk_mask_sub.toggled.connect(self._on_mask_sub_toggled)
+        row_out.addWidget(self.chk_mask_sub)
 
-        self.btn_mask_settings = QPushButton("⚙️ សារ៉េទីតាំង..." if self.lang == "km" else "⚙️ Position...")
-        self.btn_mask_settings.setStyleSheet("background-color: #1e293b; color: #38bdf8; font-size: 11px; padding: 2px 8px; border-radius: 4px; border: 1px solid #0284c7; font-weight: bold;")
-        self.btn_mask_settings.setToolTip("បើកផ្ទាំងសារ៉េទីតាំង កម្ពស់ និងកម្រិតបិទបាំងអក្សរចិនដើម (Adjust Subtitle Mask & Positioning)")
+        row_out.addStretch(1)
+        self.btn_mask_settings = QPushButton("⚙ កំណត់…" if self.lang == "km" else "⚙ Position…")
+        self.btn_mask_settings.setToolTip("បើកផ្ទាំងកំណត់ទីតាំង និងរបាំងបិទបាំងអក្សរចិន" if self.lang == "km" else "Configure Subtitle Mask & Position")
         self.btn_mask_settings.clicked.connect(self._open_subtitle_mask_dialog)
-        row_checks_2.addWidget(self.btn_mask_settings)
-        row_checks_2.addStretch()
-        layout.addLayout(row_checks_2)
+        row_out.addWidget(self.btn_mask_settings)
+        layout.addLayout(row_out)
 
         self._update_mute_status_display()
         layout.addStretch()
@@ -602,7 +831,7 @@ class MainWindow(QMainWindow):
 
         # 1. Enable Logo Checkbox
         self.chk_logo = QCheckBox(s.get("logo_enable", "Overlay Custom Logo on Video"))
-        self.chk_logo.setStyleSheet("color: #c084fc; font-weight: bold; font-size: 12px;")
+        self.chk_logo.setStyleSheet("color: #c084fc; font-weight: bold; font-size: 9pt;")
         self.chk_logo.setChecked(self.project.settings.logo_enabled)
         self.chk_logo.toggled.connect(self._on_logo_enabled_toggled)
         layout.addWidget(self.chk_logo)
@@ -611,32 +840,31 @@ class MainWindow(QMainWindow):
         row_file = QHBoxLayout()
         row_file.setSpacing(6)
         self.btn_browse_logo = QPushButton(s.get("logo_browse", "🖼️ Choose Logo..."))
-        self.btn_browse_logo.setStyleSheet("background-color: #334155; padding: 3px 8px; border-radius: 4px; font-size: 11px;")
+        self.btn_browse_logo.setStyleSheet("background-color: #334155; padding: 3px 8px; border-radius: 4px; font-size: 8.5pt;")
         self.btn_browse_logo.clicked.connect(self._on_browse_logo)
         row_file.addWidget(self.btn_browse_logo)
 
         self.btn_default_logo = QPushButton("✨ Studio Logo")
         self.btn_default_logo.setToolTip("ប្រើប្រាស់ Logo ផ្លូវការរបស់កម្មវិធី (Use built-in AI Dub Studio watermark logo)")
-        self.btn_default_logo.setStyleSheet("background-color: #0369a1; color: white; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: bold;")
+        self.btn_default_logo.setStyleSheet("background-color: #0369a1; color: white; padding: 3px 8px; border-radius: 4px; font-size: 8.5pt; font-weight: bold;")
         self.btn_default_logo.clicked.connect(self._on_use_studio_logo)
         row_file.addWidget(self.btn_default_logo)
 
         logo_name = Path(self.project.settings.logo_path).name if self.project.settings.logo_path else "គ្មាន (None)"
         self.lbl_logo_path = QLabel(logo_name)
-        self.lbl_logo_path.setStyleSheet("background: #1e293b; color: #94a3b8; font-size: 11px; padding: 2px 6px; border-radius: 3px;")
+        self.lbl_logo_path.setStyleSheet("background: #1e293b; color: #94a3b8; font-size: 8.5pt; padding: 2px 6px; border-radius: 3px;")
         row_file.addWidget(self.lbl_logo_path, stretch=1)
 
         self.btn_clear_logo = QPushButton("❌")
-        self.btn_clear_logo.setFixedSize(24, 24)
         self.btn_clear_logo.clicked.connect(self._on_clear_logo)
         row_file.addWidget(self.btn_clear_logo)
         layout.addLayout(row_file)
 
-        # 3. Logo Position Row
+        # 3. Logo Position Row (4 corners + center + dragged custom)
         row_pos = QHBoxLayout()
         row_pos.setSpacing(6)
         self.lbl_logo_pos = QLabel(s.get("logo_position", "Position") + ":")
-        self.lbl_logo_pos.setStyleSheet("font-weight: 600; color: #cbd5e1; font-size: 12px;")
+        self.lbl_logo_pos.setStyleSheet("font-weight: 600; color: #cbd5e1; font-size: 9pt;")
         row_pos.addWidget(self.lbl_logo_pos)
 
         self.combo_logo_pos = QComboBox()
@@ -645,41 +873,63 @@ class MainWindow(QMainWindow):
         row_pos.addWidget(self.combo_logo_pos, stretch=1)
         layout.addLayout(row_pos)
 
-        # 4. Logo Size Slider
+        # 4. Logo Size Slider (% of video width: 5% - 40%)
         vbox_size = QVBoxLayout()
         vbox_size.setSpacing(2)
         row_size_hdr = QHBoxLayout()
-        self.lbl_size_title = QLabel(s.get("logo_size", "Logo Size"))
-        self.lbl_size_title.setStyleSheet("font-weight: 600; color: #cbd5e1; font-size: 12px;")
-        self.lbl_logo_size = QLabel(f"{self.project.settings.logo_width}px")
-        self.lbl_logo_size.setStyleSheet("background: #1e293b; color: #38bdf8; font-weight: bold; padding: 1px 6px; border-radius: 3px; font-size: 11px;")
+        self.lbl_size_title = QLabel("ទំហំ Logo (% ទទឹងវីដេអូ)" if self.lang == "km" else "Logo Size (% video width)")
+        self.lbl_size_title.setStyleSheet("font-weight: 600; color: #cbd5e1; font-size: 9pt;")
+        init_wpct = int(round(getattr(self.project.settings, "logo_width_pct", 12.0)))
+        self.lbl_logo_size = QLabel(f"{init_wpct}%")
+        self.lbl_logo_size.setStyleSheet("background: #1e293b; color: #38bdf8; font-weight: bold; padding: 1px 6px; border-radius: 3px; font-size: 8.5pt;")
         row_size_hdr.addWidget(self.lbl_size_title)
         row_size_hdr.addStretch()
         row_size_hdr.addWidget(self.lbl_logo_size)
         vbox_size.addLayout(row_size_hdr)
 
         self.slider_logo_size = QSlider(Qt.Orientation.Horizontal)
-        self.slider_logo_size.setRange(40, 320)
-        self.slider_logo_size.setValue(self.project.settings.logo_width)
+        self.slider_logo_size.setRange(5, 40)
+        self.slider_logo_size.setValue(max(5, min(40, init_wpct)))
         self.slider_logo_size.valueChanged.connect(self._on_logo_size_changed)
         vbox_size.addWidget(self.slider_logo_size)
         layout.addLayout(vbox_size)
 
-        # 5. Logo Opacity Slider
+        # 5. Logo Margin Slider (0.0% - 10.0%)
+        vbox_margin = QVBoxLayout()
+        vbox_margin.setSpacing(2)
+        row_margin_hdr = QHBoxLayout()
+        self.lbl_margin_title = QLabel("គម្លាតពីគែម (Margin)" if self.lang == "km" else "Edge Margin")
+        self.lbl_margin_title.setStyleSheet("font-weight: 600; color: #cbd5e1; font-size: 9pt;")
+        init_mpct = float(getattr(self.project.settings, "logo_margin_pct", 2.5))
+        self.lbl_logo_margin = QLabel(f"{init_mpct:.1f}%")
+        self.lbl_logo_margin.setStyleSheet("background: #1e293b; color: #34d399; font-weight: bold; padding: 1px 6px; border-radius: 3px; font-size: 8.5pt;")
+        row_margin_hdr.addWidget(self.lbl_margin_title)
+        row_margin_hdr.addStretch()
+        row_margin_hdr.addWidget(self.lbl_logo_margin)
+        vbox_margin.addLayout(row_margin_hdr)
+
+        self.slider_logo_margin = QSlider(Qt.Orientation.Horizontal)
+        self.slider_logo_margin.setRange(0, 100)  # 0.0% .. 10.0% in 0.1% steps
+        self.slider_logo_margin.setValue(max(0, min(100, int(round(init_mpct * 10)))))
+        self.slider_logo_margin.valueChanged.connect(self._on_logo_margin_changed)
+        vbox_margin.addWidget(self.slider_logo_margin)
+        layout.addLayout(vbox_margin)
+
+        # 6. Logo Opacity Slider
         vbox_op = QVBoxLayout()
         vbox_op.setSpacing(2)
         row_op_hdr = QHBoxLayout()
         self.lbl_op_title = QLabel(s.get("logo_opacity", "Opacity"))
-        self.lbl_op_title.setStyleSheet("font-weight: 600; color: #cbd5e1; font-size: 12px;")
+        self.lbl_op_title.setStyleSheet("font-weight: 600; color: #cbd5e1; font-size: 9pt;")
         self.lbl_logo_opacity = QLabel(f"{int(self.project.settings.logo_opacity * 100)}%")
-        self.lbl_logo_opacity.setStyleSheet("background: #1e293b; color: #c084fc; font-weight: bold; padding: 1px 6px; border-radius: 3px; font-size: 11px;")
+        self.lbl_logo_opacity.setStyleSheet("background: #1e293b; color: #c084fc; font-weight: bold; padding: 1px 6px; border-radius: 3px; font-size: 8.5pt;")
         row_op_hdr.addWidget(self.lbl_op_title)
         row_op_hdr.addStretch()
         row_op_hdr.addWidget(self.lbl_logo_opacity)
         vbox_op.addLayout(row_op_hdr)
 
         self.slider_logo_opacity = QSlider(Qt.Orientation.Horizontal)
-        self.slider_logo_opacity.setRange(20, 100)
+        self.slider_logo_opacity.setRange(10, 100)
         self.slider_logo_opacity.setValue(int(self.project.settings.logo_opacity * 100))
         self.slider_logo_opacity.valueChanged.connect(self._on_logo_opacity_changed)
         vbox_op.addWidget(self.slider_logo_opacity)
@@ -697,13 +947,39 @@ class MainWindow(QMainWindow):
         self.combo_logo_pos.addItem(s.get("pos_bottom_right", "Bottom-Right"), "bottom_right")
         self.combo_logo_pos.addItem(s.get("pos_bottom_left", "Bottom-Left"), "bottom_left")
         self.combo_logo_pos.addItem(s.get("pos_center", "Center"), "center")
+        self.combo_logo_pos.addItem("✋ ទីតាំងផ្ទាល់ខ្លួន (Dragged)" if self.lang == "km" else "✋ Custom (Dragged)", "custom")
         idx = self.combo_logo_pos.findData(self.project.settings.logo_position)
         if idx >= 0:
             self.combo_logo_pos.setCurrentIndex(idx)
         self.combo_logo_pos.blockSignals(False)
 
+    def _on_tool_tab_changed(self, tab_idx: int):
+        # Automatically switch to Live preview when user opens Logo tab
+        if tab_idx == 1 and hasattr(self, "video_player"):
+            self.video_player.ensure_live_mode()
+            self._sync_overlays_to_player()
+
+    def _on_burn_sub_toggled(self, val: bool):
+        self.project.settings.burn_subtitles = val
+        if hasattr(self, "video_player"):
+            self.video_player.ensure_live_mode()
+            self.video_player.mark_result_stale(True)
+            self._sync_overlays_to_player()
+        self._on_data_changed()
+
+    def _on_mask_sub_toggled(self, val: bool):
+        self.project.settings.mask_subtitles = val
+        if hasattr(self, "video_player"):
+            self.video_player.ensure_live_mode()
+            self.video_player.mark_result_stale(True)
+            self._sync_overlays_to_player()
+        self._on_data_changed()
+
     def _on_logo_enabled_toggled(self, checked: bool):
         self.project.settings.logo_enabled = checked
+        if hasattr(self, "video_player"):
+            self.video_player.ensure_live_mode()
+            self.video_player.mark_result_stale(True)
         self._sync_logo_to_player()
         self._on_data_changed()
 
@@ -716,8 +992,13 @@ class MainWindow(QMainWindow):
         if path:
             self.project.settings.logo_path = path
             self.project.settings.logo_enabled = True
+            self.chk_logo.blockSignals(True)
             self.chk_logo.setChecked(True)
+            self.chk_logo.blockSignals(False)
             self.lbl_logo_path.setText(Path(path).name)
+            if hasattr(self, "video_player"):
+                self.video_player.ensure_live_mode()
+                self.video_player.mark_result_stale(True)
             self._sync_logo_to_player()
             self._on_data_changed()
 
@@ -727,8 +1008,13 @@ class MainWindow(QMainWindow):
             if candidate.exists():
                 self.project.settings.logo_path = str(candidate)
                 self.project.settings.logo_enabled = True
+                self.chk_logo.blockSignals(True)
                 self.chk_logo.setChecked(True)
+                self.chk_logo.blockSignals(False)
                 self.lbl_logo_path.setText(candidate.name)
+                if hasattr(self, "video_player"):
+                    self.video_player.ensure_live_mode()
+                    self.video_player.mark_result_stale(True)
                 self._sync_logo_to_player()
                 self._on_data_changed()
                 break
@@ -736,8 +1022,13 @@ class MainWindow(QMainWindow):
     def _on_clear_logo(self):
         self.project.settings.logo_path = ""
         self.project.settings.logo_enabled = False
+        self.chk_logo.blockSignals(True)
         self.chk_logo.setChecked(False)
+        self.chk_logo.blockSignals(False)
         self.lbl_logo_path.setText("គ្មាន (None)")
+        if hasattr(self, "video_player"):
+            self.video_player.ensure_live_mode()
+            self.video_player.mark_result_stale(True)
         self._sync_logo_to_player()
         self._on_data_changed()
 
@@ -745,13 +1036,47 @@ class MainWindow(QMainWindow):
         pos = self.combo_logo_pos.currentData()
         if pos:
             self.project.settings.logo_position = pos
+            if pos != "custom":
+                self.project.settings.logo_custom_x_pct = -1.0
+                self.project.settings.logo_custom_y_pct = -1.0
+            if hasattr(self, "video_player"):
+                self.video_player.ensure_live_mode()
+                self.video_player.mark_result_stale(True)
             self._sync_logo_to_player()
             self._on_data_changed()
 
+    def _on_logo_dragged_in_preview(self, pos_name: str, custom_x_pct: float, custom_y_pct: float):
+        self.project.settings.logo_position = pos_name
+        self.project.settings.logo_custom_x_pct = custom_x_pct
+        self.project.settings.logo_custom_y_pct = custom_y_pct
+        if hasattr(self, "combo_logo_pos"):
+            self.combo_logo_pos.blockSignals(True)
+            idx = self.combo_logo_pos.findData(pos_name)
+            if idx >= 0:
+                self.combo_logo_pos.setCurrentIndex(idx)
+            self.combo_logo_pos.blockSignals(False)
+        if hasattr(self, "video_player"):
+            self.video_player.mark_result_stale(True)
+        self._on_data_changed()
+
     def _on_logo_size_changed(self, val: int):
-        self.project.settings.logo_width = val
+        self.project.settings.logo_width_pct = float(val)
         if hasattr(self, "lbl_logo_size"):
-            self.lbl_logo_size.setText(f"{val}px")
+            self.lbl_logo_size.setText(f"{val}%")
+        if hasattr(self, "video_player"):
+            self.video_player.ensure_live_mode()
+            self.video_player.mark_result_stale(True)
+        self._sync_logo_to_player()
+        self._on_data_changed()
+
+    def _on_logo_margin_changed(self, val: int):
+        mpct = round(val / 10.0, 1)
+        self.project.settings.logo_margin_pct = mpct
+        if hasattr(self, "lbl_logo_margin"):
+            self.lbl_logo_margin.setText(f"{mpct:.1f}%")
+        if hasattr(self, "video_player"):
+            self.video_player.ensure_live_mode()
+            self.video_player.mark_result_stale(True)
         self._sync_logo_to_player()
         self._on_data_changed()
 
@@ -760,8 +1085,40 @@ class MainWindow(QMainWindow):
         self.project.settings.logo_opacity = op
         if hasattr(self, "lbl_logo_opacity"):
             self.lbl_logo_opacity.setText(f"{val}%")
+        if hasattr(self, "video_player"):
+            self.video_player.ensure_live_mode()
+            self.video_player.mark_result_stale(True)
         self._sync_logo_to_player()
         self._on_data_changed()
+
+    def _sync_logo_widgets_from_settings(self):
+        st = self.project.settings
+        if hasattr(self, "chk_logo"):
+            self.chk_logo.blockSignals(True)
+            self.chk_logo.setChecked(st.logo_enabled)
+            self.chk_logo.blockSignals(False)
+        if hasattr(self, "lbl_logo_path"):
+            self.lbl_logo_path.setText(Path(st.logo_path).name if st.logo_path else "គ្មាន (None)")
+        if hasattr(self, "combo_logo_pos"):
+            self._populate_logo_positions()
+        if hasattr(self, "slider_logo_size"):
+            wpct = int(round(getattr(st, "logo_width_pct", 12.0)))
+            self.slider_logo_size.blockSignals(True)
+            self.slider_logo_size.setValue(max(5, min(40, wpct)))
+            self.slider_logo_size.blockSignals(False)
+            self.lbl_logo_size.setText(f"{wpct}%")
+        if hasattr(self, "slider_logo_margin"):
+            mpct = float(getattr(st, "logo_margin_pct", 2.5))
+            self.slider_logo_margin.blockSignals(True)
+            self.slider_logo_margin.setValue(max(0, min(100, int(round(mpct * 10)))))
+            self.slider_logo_margin.blockSignals(False)
+            self.lbl_logo_margin.setText(f"{mpct:.1f}%")
+        if hasattr(self, "slider_logo_opacity"):
+            opct = int(round(st.logo_opacity * 100))
+            self.slider_logo_opacity.blockSignals(True)
+            self.slider_logo_opacity.setValue(max(10, min(100, opct)))
+            self.slider_logo_opacity.blockSignals(False)
+            self.lbl_logo_opacity.setText(f"{opct}%")
 
     def _sync_logo_to_player(self):
         st = self.project.settings
@@ -769,20 +1126,61 @@ class MainWindow(QMainWindow):
             enabled=st.logo_enabled,
             path=st.logo_path,
             position=st.logo_position,
-            width=st.logo_width,
+            width_pct=getattr(st, "logo_width_pct", 12.0),
             opacity=st.logo_opacity,
-            margin_x=st.logo_margin_x,
-            margin_y=st.logo_margin_y
+            margin_pct=getattr(st, "logo_margin_pct", 2.5),
+            custom_x_pct=getattr(st, "logo_custom_x_pct", -1.0),
+            custom_y_pct=getattr(st, "logo_custom_y_pct", -1.0),
         )
 
+    def _sync_overlays_to_player(self):
+        st = self.project.settings
+        if hasattr(self.video_player, "set_mask_config"):
+            self.video_player.set_mask_config(
+                enabled=getattr(st, "mask_subtitles", True),
+                x_pct=getattr(st, "mask_x_percent", 0.0),
+                y_pct=getattr(st, "mask_y_percent", 83.0),
+                w_pct=getattr(st, "mask_width_percent", 100.0),
+                h_pct=getattr(st, "mask_height_percent", 12.0),
+                opacity=getattr(st, "mask_opacity", 0.95),
+                color=getattr(st, "mask_color", "black"),
+                style=getattr(st, "mask_style", "solid"),
+            )
+        if hasattr(self.video_player, "set_subtitle_config"):
+            self.video_player.set_subtitle_config(
+                enabled=getattr(st, "burn_subtitles", True),
+                font_size=getattr(st, "subtitle_font_size", 20),
+                margin_v=getattr(st, "subtitle_margin_v", 25),
+            )
+        self._sync_logo_to_player()
+
+    def _on_ui_lang_combo_changed(self):
+        if not hasattr(self, "cb_ui_lang"):
+            return
+        new_lang = self.cb_ui_lang.currentData() or "km"
+        if new_lang == self.lang:
+            return
+        self._apply_language(new_lang)
+
     def _toggle_language(self):
-        self.lang = "en" if self.lang == "km" else "km"
+        new_lang = "en" if self.lang == "km" else "km"
+        self._apply_language(new_lang)
+        if hasattr(self, "cb_ui_lang"):
+            self.cb_ui_lang.blockSignals(True)
+            idx = self.cb_ui_lang.findData(new_lang)
+            if idx >= 0:
+                self.cb_ui_lang.setCurrentIndex(idx)
+            self.cb_ui_lang.blockSignals(False)
+
+    def _apply_language(self, new_lang: str):
+        self.lang = new_lang
         self.project.settings.ui_language = self.lang
         self.setWindowTitle(f"{STRINGS[self.lang]['app_title']} v{APP_VERSION}")
         self._create_menu_bar()
-        self.removeToolBar(self.findChild(QToolBar))
-        self._create_tool_bar()
+        self._refresh_header_labels()
         self.segment_table.set_language(self.lang)
+        if hasattr(self.video_player, "set_language"):
+            self.video_player.set_language(self.lang)
         self._update_mixing_labels()
         self.status_bar.showMessage(STRINGS[self.lang]["status_ready"])
 
@@ -816,9 +1214,11 @@ class MainWindow(QMainWindow):
         if self.lang == "km":
             self.cb_trans_provider.addItem("🌐 Google (ចាស់)", "google")
             self.cb_trans_provider.addItem("✨ Gemini 1.5 Flash", "gemini")
+            self.cb_trans_provider.addItem("💬 ChatGPT (OpenAI)", "openai")
         else:
             self.cb_trans_provider.addItem("🌐 Google (Classic)", "google")
             self.cb_trans_provider.addItem("✨ Gemini 1.5 Flash", "gemini")
+            self.cb_trans_provider.addItem("💬 ChatGPT (OpenAI)", "openai")
 
         cur_prov = getattr(self.project.settings, "translation_provider", "google") or "google"
         idx = self.cb_trans_provider.findData(cur_prov)
@@ -832,7 +1232,37 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "cb_trans_provider"):
             return
         prov = self.cb_trans_provider.currentData() or "google"
-        if prov == "gemini":
+        if prov == "openai":
+            from app.secrets import get_openai_api_key, set_openai_api_key
+            if not get_openai_api_key():
+                from PySide6.QtWidgets import QInputDialog
+                key, ok = QInputDialog.getText(
+                    self,
+                    "OpenAI / ChatGPT API Key",
+                    "សូមបញ្ចូល OpenAI API Key (រក្សាទុកដោយសុវត្ថិភាពក្នុង OS Credential Store):" if self.lang == "km"
+                    else "Enter OpenAI API Key (saved securely in OS Credential Store):",
+                    QLineEdit.EchoMode.Password
+                )
+                if ok and key.strip():
+                    set_openai_api_key(key.strip())
+                    self.project.settings.translation_provider = "openai"
+                    self.translation_engine.settings = self.project.settings
+                    self.status_bar.showMessage("បានរក្សាទុក OpenAI API Key ដោយសុវត្ថិភាព និងបើកប្រើ ChatGPT!", 4500)
+                else:
+                    self.cb_trans_provider.blockSignals(True)
+                    idx = self.cb_trans_provider.findData("google")
+                    if idx >= 0:
+                        self.cb_trans_provider.setCurrentIndex(idx)
+                    self.cb_trans_provider.blockSignals(False)
+                    self.project.settings.translation_provider = "google"
+                    self.translation_engine.settings = self.project.settings
+                    return
+            else:
+                self.project.settings.translation_provider = "openai"
+                self.translation_engine.settings = self.project.settings
+                model_name = getattr(self.project.settings, "openai_trans_model", "gpt-4o-mini")
+                self.status_bar.showMessage(f"បានជ្រើសរើស Engine: ChatGPT / OpenAI ({model_name})", 4000)
+        elif prov == "gemini":
             if not self.project.settings.gemini_api_key:
                 from PySide6.QtWidgets import QInputDialog
                 key, ok = QInputDialog.getText(
@@ -868,48 +1298,44 @@ class MainWindow(QMainWindow):
 
     def _update_mixing_labels(self):
         s = STRINGS[self.lang]
-        if hasattr(self, "lbl_orig_title"):
-            self.lbl_orig_title.setText(s.get("original_voice_volume", "Original Voice Volume"))
-        if hasattr(self, "lbl_bg_title"):
-            self.lbl_bg_title.setText(s.get("background_volume", "Background (Music/SFX) Volume"))
+        if hasattr(self, "sw_orig_voice"):
+            self.sw_orig_voice.setText("សំឡេងដើម" if self.lang == "km" else "Original Voice")
+        if hasattr(self, "sw_bg_music"):
+            self.sw_bg_music.setText("ភ្លេង / SFX" if self.lang == "km" else "Music / SFX")
         if hasattr(self, "lbl_dub_title"):
-            self.lbl_dub_title.setText(s.get("ai_voice_volume", "AI Voice Volume"))
+            self.lbl_dub_title.setText("សំឡេង AI" if self.lang == "km" else "AI Voice")
         if hasattr(self, "lbl_spd_title"):
-            self.lbl_spd_title.setText(s.get("ai_voice_speed", "AI Voice Speed"))
-        if hasattr(self, "btn_apply_spd_all"):
-            self.btn_apply_spd_all.setText(s.get("btn_apply_speed_all", "⚡ អនុវត្តគ្រប់វគ្គ"))
-        if hasattr(self, "chk_mute_orig"):
-            self.chk_mute_orig.setText(s.get("mute_original", "Mute Original Audio"))
-        if hasattr(self, "chk_keep_bg"):
-            self.chk_keep_bg.setText(s.get("keep_background", "Keep Background"))
+            self.lbl_spd_title.setText("ល្បឿន:" if self.lang == "km" else "Speed:")
         if hasattr(self, "chk_burn_sub"):
-            self.chk_burn_sub.setText(s.get("burn_subtitles", "Burn Subtitles"))
+            self.chk_burn_sub.setText("ដាក់អក្សរខ្មែរ" if self.lang == "km" else "Burn Subtitles")
         if hasattr(self, "chk_mask_sub"):
-            self.chk_mask_sub.setText(s.get("mask_subtitles", "Mask Original Subtitles"))
+            self.chk_mask_sub.setText("បិទបាំងអក្សរចិន" if self.lang == "km" else "Mask Subtitles")
         if hasattr(self, "btn_mask_settings"):
-            self.btn_mask_settings.setText("⚙️ សារ៉េទីតាំង..." if self.lang == "km" else "⚙️ Position...")
+            self.btn_mask_settings.setText("⚙ កំណត់…" if self.lang == "km" else "⚙ Position…")
         self._update_mute_status_display()
 
         # Update tabs & logo panel labels
         if hasattr(self, "tool_tabs"):
-            self.tool_tabs.setTabText(0, s.get("audio_mixing_tab", "🎛️ សំឡេង (Audio)"))
-            self.tool_tabs.setTabText(1, s.get("logo_tool_tab", "🎨 Logo"))
+            self.tool_tabs.setTabText(0, "🎛️ សំឡេង" if self.lang == "km" else "🎛️ Audio")
+            self.tool_tabs.setTabText(1, "🎨 Logo")
         if hasattr(self, "chk_logo"):
-            self.chk_logo.setText(s.get("logo_enable", "Overlay Custom Logo on Video"))
+            self.chk_logo.setText("បង្ហាញ Logo លើវីដេអូ" if self.lang == "km" else "Overlay Custom Logo")
         if hasattr(self, "btn_browse_logo"):
-            self.btn_browse_logo.setText(s.get("logo_browse", "🖼️ Choose Logo..."))
+            self.btn_browse_logo.setText("🖼️ ជ្រើស Logo…" if self.lang == "km" else "🖼️ Choose Logo…")
         if hasattr(self, "lbl_logo_pos"):
-            self.lbl_logo_pos.setText(s.get("logo_position", "Position") + ":")
+            self.lbl_logo_pos.setText("ទីតាំង:" if self.lang == "km" else "Position:")
         self._populate_logo_positions()
         if hasattr(self, "lbl_size_title"):
-            self.lbl_size_title.setText(s.get("logo_size", "Logo Size"))
+            self.lbl_size_title.setText("ទំហំ Logo (% ទទឹងវីដេអូ)" if self.lang == "km" else "Logo Size (% video width)")
+        if hasattr(self, "lbl_margin_title"):
+            self.lbl_margin_title.setText("គម្លាតពីគែម (Margin)" if self.lang == "km" else "Edge Margin")
         if hasattr(self, "lbl_op_title"):
-            self.lbl_op_title.setText(s.get("logo_opacity", "Opacity"))
+            self.lbl_op_title.setText("កម្រិតច្បាស់" if self.lang == "km" else "Opacity")
         if hasattr(self, "btn_main_preview"):
-            self.btn_main_preview.setText("👁️ " + s.get("btn_preview_dubbed", "មើលលទ្ធផលសាកល្បង") + " (Ctrl+P)")
+            self.btn_main_preview.setText(("👁️ មើលលទ្ធផលសាកល្បង (Ctrl+P)" if self.lang == "km" else "👁️ Preview Result (Ctrl+P)"))
 
     def _update_mute_status_display(self):
-        """Display consolidated 1-phrase mute status and keep checkbox & sliders synced."""
+        """Display consolidated 1-phrase mute status and keep switches & sliders synced."""
         st = self.project.settings
         orig_on = st.original_voice_volume > 0.001 and not st.mute_original
         bg_on = st.background_volume > 0.001 and (st.keep_background or not st.mute_original)
@@ -917,62 +1343,65 @@ class MainWindow(QMainWindow):
         orig_str = f"{int(st.original_voice_volume * 100)}%" if orig_on else "OFF"
         bg_str = f"{int(st.background_volume * 100)}%" if bg_on else "OFF"
 
-        status_text = f"Original: {orig_str}, BG: {bg_str}"
+        status_text = f"Original: {orig_str} | BG: {bg_str}"
         if hasattr(self, "lbl_mute_summary"):
-            self.lbl_mute_summary.setText(f"[ {status_text} ]")
+            self.lbl_mute_summary.setText(status_text)
             if not orig_on and not bg_on:
-                self.lbl_mute_summary.setStyleSheet("background: #7f1d1d; color: #fecaca; font-weight: bold; padding: 1px 6px; border-radius: 3px; font-size: 10px;")
+                self.lbl_mute_summary.setStyleSheet("background: #3B1219; color: #FCA5A5; font-weight: bold; padding: 2px 8px; border-radius: 4px; font-size: 7.5pt;")
             elif not orig_on and bg_on:
-                self.lbl_mute_summary.setStyleSheet("background: #854d0e; color: #fde047; font-weight: bold; padding: 1px 6px; border-radius: 3px; font-size: 10px;")
+                self.lbl_mute_summary.setStyleSheet("background: #422006; color: #FDE047; font-weight: bold; padding: 2px 8px; border-radius: 4px; font-size: 7.5pt;")
             else:
-                self.lbl_mute_summary.setStyleSheet("background: #064e3b; color: #34d399; font-weight: bold; padding: 1px 6px; border-radius: 3px; font-size: 10px;")
+                self.lbl_mute_summary.setStyleSheet("background: #0F2E22; color: #34D399; font-weight: bold; padding: 2px 8px; border-radius: 4px; font-size: 7.5pt;")
 
-    def _on_mute_original_toggled(self, checked: bool):
-        self.project.settings.mute_original = checked
+    def _on_orig_voice_switch_toggled(self, checked: bool):
         if checked:
-            self.slider_orig_vol.setValue(0)
-            self.slider_orig_vol.setEnabled(False)
+            self.project.settings.mute_original = False
+            self.slider_orig_vol.setEnabled(True)
+            if self.slider_orig_vol.value() == 0:
+                self.slider_orig_vol.blockSignals(True)
+                self.slider_orig_vol.setValue(30)
+                self.slider_orig_vol.blockSignals(False)
+                self.project.settings.original_voice_volume = 0.3
+                self.project.settings.original_volume = 0.3
+            if hasattr(self, "lbl_orig_val"):
+                self.lbl_orig_val.setText(f"{self.slider_orig_vol.value()}%")
+        else:
+            self.project.settings.mute_original = True
             self.project.settings.original_voice_volume = 0.0
             self.project.settings.original_volume = 0.0
+            self.slider_orig_vol.blockSignals(True)
+            self.slider_orig_vol.setValue(0)
+            self.slider_orig_vol.blockSignals(False)
+            self.slider_orig_vol.setEnabled(False)
             if hasattr(self, "lbl_orig_val"):
-                self.lbl_orig_val.setText("0% (OFF)")
-            if not self.project.settings.keep_background:
-                self.slider_bg_vol.setValue(0)
-                self.slider_bg_vol.setEnabled(False)
-                self.project.settings.background_volume = 0.0
-                if hasattr(self, "lbl_bg_val"):
-                    self.lbl_bg_val.setText("0% (OFF)")
-        else:
-            self.slider_orig_vol.setEnabled(True)
-            self.slider_orig_vol.setValue(30)
-            self.project.settings.original_voice_volume = 0.3
-            self.project.settings.original_volume = 0.3
-            if hasattr(self, "lbl_orig_val"):
-                self.lbl_orig_val.setText("30%")
-            self.slider_bg_vol.setEnabled(True)
-            if self.slider_bg_vol.value() == 0:
-                self.slider_bg_vol.setValue(30)
-                self.project.settings.background_volume = 0.3
-            if hasattr(self, "lbl_bg_val"):
-                self.lbl_bg_val.setText(f"{self.slider_bg_vol.value()}%")
+                self.lbl_orig_val.setText("OFF")
+            # Preserve background switch intent
+            if hasattr(self, "sw_bg_music"):
+                self.project.settings.keep_background = self.sw_bg_music.isChecked()
         self._update_mute_status_display()
         self._on_data_changed()
 
-    def _on_keep_bg_toggled(self, checked: bool):
+    def _on_bg_music_switch_toggled(self, checked: bool):
         self.project.settings.keep_background = checked
         if checked:
             self.slider_bg_vol.setEnabled(True)
             if self.slider_bg_vol.value() == 0:
+                self.slider_bg_vol.blockSignals(True)
                 self.slider_bg_vol.setValue(30)
+                self.slider_bg_vol.blockSignals(False)
                 self.project.settings.background_volume = 0.3
             if hasattr(self, "lbl_bg_val"):
                 self.lbl_bg_val.setText(f"{self.slider_bg_vol.value()}%")
-        elif self.project.settings.mute_original:
-            self.slider_bg_vol.setValue(0)
-            self.slider_bg_vol.setEnabled(False)
+        else:
             self.project.settings.background_volume = 0.0
+            self.slider_bg_vol.blockSignals(True)
+            self.slider_bg_vol.setValue(0)
+            self.slider_bg_vol.blockSignals(False)
+            self.slider_bg_vol.setEnabled(False)
             if hasattr(self, "lbl_bg_val"):
-                self.lbl_bg_val.setText("0% (OFF)")
+                self.lbl_bg_val.setText("OFF")
+            if hasattr(self, "sw_orig_voice") and not self.sw_orig_voice.isChecked():
+                self.project.settings.mute_original = True
         self._update_mute_status_display()
         self._on_data_changed()
 
@@ -981,19 +1410,14 @@ class MainWindow(QMainWindow):
         self.project.settings.original_voice_volume = vol
         self.project.settings.original_volume = vol
         if hasattr(self, "lbl_orig_val"):
-            self.lbl_orig_val.setText(f"{val}%" if val > 0 else "0% (OFF)")
-        if val == 0:
-            if not self.chk_mute_orig.isChecked() and (self.slider_bg_vol.value() == 0 or not self.project.settings.keep_background):
-                self.chk_mute_orig.blockSignals(True)
-                self.chk_mute_orig.setChecked(True)
-                self.chk_mute_orig.blockSignals(False)
-                self.project.settings.mute_original = True
-        else:
-            if self.chk_mute_orig.isChecked():
-                self.chk_mute_orig.blockSignals(True)
-                self.chk_mute_orig.setChecked(False)
-                self.chk_mute_orig.blockSignals(False)
-                self.project.settings.mute_original = False
+            self.lbl_orig_val.setText(f"{val}%" if val > 0 else "OFF")
+        if hasattr(self, "sw_orig_voice"):
+            self.sw_orig_voice.blockSignals(True)
+            self.sw_orig_voice.setChecked(val > 0)
+            self.sw_orig_voice.blockSignals(False)
+        self.project.settings.mute_original = (val == 0)
+        if val == 0 and hasattr(self, "sw_bg_music"):
+            self.project.settings.keep_background = self.sw_bg_music.isChecked()
         self._update_mute_status_display()
         self._on_data_changed()
 
@@ -1001,7 +1425,12 @@ class MainWindow(QMainWindow):
         vol = val / 100.0
         self.project.settings.background_volume = vol
         if hasattr(self, "lbl_bg_val"):
-            self.lbl_bg_val.setText(f"{val}%" if val > 0 else "0% (OFF)")
+            self.lbl_bg_val.setText(f"{val}%" if val > 0 else "OFF")
+        if hasattr(self, "sw_bg_music"):
+            self.sw_bg_music.blockSignals(True)
+            self.sw_bg_music.setChecked(val > 0)
+            self.sw_bg_music.blockSignals(False)
+        self.project.settings.keep_background = (val > 0)
         self._update_mute_status_display()
         self._on_data_changed()
 
@@ -1013,15 +1442,18 @@ class MainWindow(QMainWindow):
 
     def _on_duck_changed(self, val: int):
         self.project.settings.ducking_db = float(val)
-        if hasattr(self, "lbl_duck_val"):
-            self.lbl_duck_val.setText(f"{val} dB")
+        self._on_data_changed()
+
+    def _on_speed_segment_changed(self, spd: float):
+        self.project.settings.ai_voice_speed = float(spd)
         self._on_data_changed()
 
     def _on_ai_speed_changed(self, val: int):
         spd = round(val / 100.0, 2)
         self.project.settings.ai_voice_speed = spd
-        if hasattr(self, "lbl_spd_val"):
-            self.lbl_spd_val.setText(f"{spd:.2f}x")
+        if hasattr(self, "seg_ai_speed"):
+            nearest = min([0.90, 1.00, 1.05, 1.15, 1.25], key=lambda v: abs(v - spd))
+            self.seg_ai_speed.set_value(nearest, emit=False)
         self._on_data_changed()
 
     def _apply_global_speed_to_all(self):
@@ -1060,10 +1492,14 @@ class MainWindow(QMainWindow):
     # --- Project Actions ---
     def _new_project(self):
         self.project = Project()
-        self.video_player.stop()
+        if hasattr(self.video_player, "clear_video"):
+            self.video_player.clear_video()
+        else:
+            self.video_player.stop()
         self.segment_table.populate(self.project)
-        self.lbl_stats.setText("0 Segments")
+        self.lbl_stats.setText("0 ឃ្លា" if self.lang == "km" else "0 Segments")
         self.status_bar.showMessage("New project created.")
+        self._update_stepper_states()
 
     def _open_project(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -1079,8 +1515,10 @@ class MainWindow(QMainWindow):
                 self.video_player.load_video(self.project.video_path)
             if self.project.settings.result_video_path and os.path.exists(self.project.settings.result_video_path):
                 self.video_player.set_result_video(self.project.settings.result_video_path)
-            self._sync_logo_to_player()
+            self._sync_logo_widgets_from_settings()
+            self._sync_overlays_to_player()
             self._update_stats_display()
+            self._update_stepper_states()
             self.status_bar.showMessage(STRINGS[self.lang]["status_saved"])
 
     def _save_project(self):
@@ -1104,10 +1542,16 @@ class MainWindow(QMainWindow):
         )
         if not path:
             return
+        self._load_video_path(path)
+
+    def _load_video_path(self, path: str):
+        if not path or not os.path.exists(path):
+            return
         self.project.video_path = path
         self.project.name = Path(path).stem
         self.video_player.load_video(path)
-        self._sync_logo_to_player()
+        self._sync_overlays_to_player()
+        self._update_stepper_states()
         self.status_bar.showMessage(f"Loaded video: {Path(path).name}")
 
     # --- Pipeline Workflow Execution (Async) ---
@@ -1124,9 +1568,10 @@ class MainWindow(QMainWindow):
 
     def _open_ocr_options_menu(self):
         from PySide6.QtWidgets import QDialog, QFormLayout, QComboBox, QDoubleSpinBox, QCheckBox, QDialogButtonBox
+        from app.ui.theme import fit_dialog_to_screen
         dlg = QDialog(self)
         dlg.setWindowTitle("⚙️ ការកំណត់ OCR អក្សរក្នុងវិដេអូ (OCR Settings)")
-        dlg.resize(420, 260)
+        fit_dialog_to_screen(dlg, 420, 280)
         form = QFormLayout(dlg)
 
         cb_eng = QComboBox()
@@ -1164,7 +1609,20 @@ class MainWindow(QMainWindow):
             self._on_data_changed()
 
     def _worker_transcribe(self, progress_cb):
+        self._last_openai_stt_usage = None
         src_mode = getattr(self.project.settings, "src_mode", "auto") or "auto"
+        if src_mode == "openai":
+            from app.openai_client import OpenAIClient
+            client = OpenAIClient(self.project.settings)
+            segments, usage = client.transcribe_video(
+                video_path=self.project.video_path,
+                source_lang=getattr(self.project.settings, "source_language", "zh") or "zh",
+                progress_cb=progress_cb,
+                cancel_cb=lambda: getattr(self, "_cancel_requested", False),
+            )
+            self._last_openai_stt_usage = usage
+            return segments, None
+
         ocr_engine_name = getattr(self.project.settings, "ocr_engine", "rapidocr") or "rapidocr"
         ocr_fps = float(getattr(self.project.settings, "ocr_fps", 5.0))
         use_ocr_ts = bool(getattr(self.project.settings, "use_ocr_timestamps", True))
@@ -1244,6 +1702,7 @@ class MainWindow(QMainWindow):
         self.project.segments = segments
         self.segment_table.populate(self.project)
         self._update_stats_display()
+        self._update_stepper_states()
 
         if ocr_report is not None:
             self.status_bar.showMessage(f"OCR complete: {ocr_report.total_segments} phrases extracted.")
@@ -1258,8 +1717,19 @@ class MainWindow(QMainWindow):
                 report_msg += "\n\nជួរដែលគួរពិនិត្យ:\n" + "\n".join(ocr_report.details[:5])
             QMessageBox.information(self, "របាយការណ៍ស្កេន OCR (OCR Scan Report)", report_msg)
         else:
-            self.status_bar.showMessage(f"Transcribed {len(segments)} segments.")
-            QMessageBox.information(self, "Transcribe Complete", f"បានស្រង់យក {len(segments)} វគ្គដោយជោគជ័យ!")
+            stt_usage = getattr(self, "_last_openai_stt_usage", None)
+            if stt_usage is not None and getattr(stt_usage, "audio_minutes", 0.0) > 0:
+                self.status_bar.showMessage(
+                    f"ស្រង់អត្ថបទ OpenAI រួចរាល់: {len(segments)} វគ្គ | {stt_usage.summary_km()}"
+                )
+                QMessageBox.information(
+                    self,
+                    "Transcribe Complete",
+                    f"បានស្រង់យក {len(segments)} វគ្គដោយជោគជ័យ (OpenAI Audio API)!\n{stt_usage.summary_km()}"
+                )
+            else:
+                self.status_bar.showMessage(f"Transcribed {len(segments)} segments.")
+                QMessageBox.information(self, "Transcribe Complete", f"បានស្រង់យក {len(segments)} វគ្គដោយជោគជ័យ!")
 
     def _run_translation(self):
         if not self.project.segments:
@@ -1281,6 +1751,39 @@ class MainWindow(QMainWindow):
                 return
             self._skip_imported_on_translate = (ans == QMessageBox.StandardButton.No)
 
+        self._last_openai_trans_usage = None
+        provider = getattr(self.project.settings, "translation_provider", "google") or "google"
+        if provider == "openai":
+            from app.secrets import get_openai_api_key
+            from app.openai_client import estimate_translation_cost
+            if not get_openai_api_key():
+                QMessageBox.warning(
+                    self,
+                    "OpenAI API Key",
+                    "មិនទាន់មាន OpenAI API Key ទេ! សូមបញ្ចូលក្នុង Settings → OpenAI / ChatGPT ជាមុនសិន។"
+                )
+                return
+            pending = [
+                s for s in self.project.segments
+                if not (self._skip_imported_on_translate and getattr(s, "translation_source", "") == "imported")
+                and (s.text_src or "").strip()
+            ]
+            oai_model = getattr(self.project.settings, "openai_trans_model", "gpt-4o-mini") or "gpt-4o-mini"
+            est = estimate_translation_cost(pending, model=oai_model)
+            ans_est = QMessageBox.question(
+                self,
+                "ប៉ាន់ស្មានតម្លៃ OpenAI Batch",
+                f"ម៉ូដែល: {oai_model}\n"
+                f"ចំនួនជួរត្រូវបកប្រែ: {len(pending)} ជួរ (Batch 30 ជួរ/ដង)\n"
+                f"ប៉ាន់ស្មាន Token: ~{est.total_tokens:,} tokens\n"
+                f"ប៉ាន់ស្មានតម្លៃ: ~${est.estimated_usd:.4f} USD\n\n"
+                "តើអ្នកចង់ចាប់ផ្ដើមបកប្រែឥឡូវនេះទេ?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            if ans_est != QMessageBox.StandardButton.Yes:
+                return
+
         self._start_worker(
             "Translation",
             self._worker_translate,
@@ -1288,39 +1791,51 @@ class MainWindow(QMainWindow):
         )
 
     def _worker_translate(self, progress_cb):
-        total = len(self.project.segments)
         t_lang = getattr(self.project.settings, "target_language", "km") or "km"
-        lang_lbl = TARGET_LANG_MAP.get(t_lang, {}).get("label", t_lang)
         male_v, female_v = get_voice_pair_for_lang(t_lang)
-        for i, s in enumerate(self.project.segments):
-            if getattr(self, "_skip_imported_on_translate", False) and getattr(s, "translation_source", "") == "imported":
+        skip_imp = getattr(self, "_skip_imported_on_translate", False)
+        provider = getattr(self.project.settings, "translation_provider", "google") or "google"
+
+        def _on_usage(stats):
+            self._last_openai_trans_usage = stats
+
+        self.translation_engine.settings = self.project.settings
+        self.translation_engine.translate_segments(
+            segments=self.project.segments,
+            glossary=self.project.glossary,
+            target_lang=t_lang,
+            progress_cb=progress_cb,
+            usage_cb=_on_usage if provider == "openai" else None,
+            cancel_cb=lambda: getattr(self, "_cancel_requested", False),
+            skip_imported=skip_imp,
+        )
+        for s in self.project.segments:
+            if skip_imp and getattr(s, "translation_source", "") == "imported":
                 continue
-            pct = int((i / max(1, total)) * 100)
-            progress_cb(pct, f"កំពុងបកប្រែវគ្គ {i+1}/{total} ទៅជាសម្ដីនិយាយធម្មជាតិ ({lang_lbl})...")
-            prev_txt = self.project.segments[i - 1].text_src if i > 0 else ""
-            next_txt = self.project.segments[i + 1].text_src if i + 1 < total else ""
-            s.text_km = self.translation_engine.translate_segment(
-                src_text=s.text_src,
-                glossary=self.project.glossary,
-                context_before=prev_txt,
-                context_after=next_txt,
-                target_lang=t_lang,
-                slot_duration=s.slot
-            )
             s.translation_source = "auto"
             s.tts_outdated = True
-            # Ensure segment voice matches target language & invalidate old TTS audio
-            s.voice = male_v
+            s.voice = female_v if is_female_voice(s.voice) else male_v
             s.tts_file = ""
             s.tts_duration = 0.0
         return self.project.segments
 
     def _on_translate_finished(self, _):
         self.segment_table.populate(self.project)
+        self._update_stepper_states()
         t_lang = getattr(self.project.settings, "target_language", "km") or "km"
         lang_lbl = TARGET_LANG_MAP.get(t_lang, {}).get("label", t_lang)
-        self.status_bar.showMessage(f"Translation into {lang_lbl} complete.")
-        QMessageBox.information(self, "Translation Complete", f"ការបកប្រែទៅជា {lang_lbl} បានរួចរាល់!")
+        tr_usage = getattr(self, "_last_openai_trans_usage", None)
+        if tr_usage is not None and (getattr(tr_usage, "total_tokens", 0) > 0 or getattr(tr_usage, "estimated_usd", 0.0) > 0):
+            summary = tr_usage.summary_km()
+            self.status_bar.showMessage(f"បកប្រែទៅ {lang_lbl} រួចរាល់ | {summary}")
+            QMessageBox.information(
+                self,
+                "Translation Complete",
+                f"ការបកប្រែទៅជា {lang_lbl} បានរួចរាល់!\n{summary}"
+            )
+        else:
+            self.status_bar.showMessage(f"Translation into {lang_lbl} complete.")
+            QMessageBox.information(self, "Translation Complete", f"ការបកប្រែទៅជា {lang_lbl} បានរួចរាល់!")
 
     def _run_tts_generation(self):
         if not self.project.segments:
@@ -1380,17 +1895,24 @@ class MainWindow(QMainWindow):
         )
         only_regen_outdated = has_any_valid_tts and has_any_outdated
 
-        for i, s in enumerate(self.project.segments):
+        to_generate = []
+        for s in self.project.segments:
             if only_regen_outdated and s.tts_file and os.path.exists(s.tts_file) and not getattr(s, "tts_outdated", False):
                 continue
-            pct = int((i / max(1, total)) * 85)
-            target_speed = s.speed if (s.is_modified and s.speed != 1.0) else global_speed
+            to_generate.append(s)
 
-            progress_cb(pct, f"កំពុងបង្កើតសំឡេង AI ប្រុស វគ្គ {i+1}/{total} (ID: {s.id})...")
-            self.tts_engine.generate_segment_tts(s, speed_factor=target_speed)
-            s.is_modified = False
-            s.tts_outdated = False
-            time.sleep(0.08)
+        if to_generate:
+            progress_cb(5, f"កំពុងបង្កើតសំឡេង AI ប្រុស {len(to_generate)} វគ្គ (Parallel 5x)...")
+            self.tts_engine.generate_segments_batch(
+                to_generate,
+                speed_fn=lambda s: s.speed if (s.is_modified and s.speed != 1.0) else global_speed,
+                max_workers=5,
+                progress_cb=lambda pct, msg: progress_cb(int(pct * 0.85), msg),
+                cancel_cb=lambda: getattr(self, "_cancel_requested", False),
+            )
+            for s in to_generate:
+                s.is_modified = False
+                s.tts_outdated = False
 
         # Automatically run 4-stage time-sync & lip-sync alignment right after generating voices!
         progress_cb(90, "កំពុងតម្រឹមសំឡេងឱ្យស៊ីគ្នាជាមួយមាត់តួអង្គ (Auto Lip-Sync)...")
@@ -1402,6 +1924,7 @@ class MainWindow(QMainWindow):
     def _on_tts_finished(self, _):
         self.audio_engine.align_speech_and_subtitles(self.project.segments)
         self.segment_table.populate(self.project)
+        self._update_stepper_states()
         self.status_bar.showMessage("Khmer AI voice generation complete.")
         QMessageBox.information(self, "TTS Complete", "បានបង្កើតឯកសារសំឡេង AI ខ្មែរគ្រប់វគ្គ!")
 
@@ -1424,8 +1947,21 @@ class MainWindow(QMainWindow):
         self.audio_engine.align_speech_and_subtitles(self.project.segments)
         self.segment_table.populate(self.project)
         self._update_stats_display()
+        self._update_stepper_states()
         self.status_bar.showMessage("Time synchronization complete.")
-        
+
+        overflow_cnt = sum(
+            1 for s in self.project.segments
+            if s.sync_status == "OVERFLOW" or getattr(s, "speed", 1.0) > 1.15
+        )
+        if overflow_cnt > 0:
+            self.notif_manager.notify(
+                "warning",
+                "ការព្រមានល្បឿននិយាយ (Overflow / > 1.15x)",
+                f"មានវគ្គចំនួន {overflow_cnt} ដែលវែងជាង slot ឬត្រូវពន្លឿន > 1.15x។",
+                persist=True,
+            )
+
         # Show sync report dialog automatically
         self._show_sync_report()
 
@@ -1446,6 +1982,7 @@ class MainWindow(QMainWindow):
 
         def _on_preview_done(preview_mp4):
             self.video_player.set_preview_video(preview_mp4)
+            self._update_stepper_states()
             self.status_bar.showMessage("វីដេអូ Preview រួចរាល់ហើយ! កំពុងចាក់សាកល្បងលទ្ធផល...", 6000)
 
         self._start_worker(
@@ -1471,6 +2008,18 @@ class MainWindow(QMainWindow):
         def _on_export_done(_):
             self.project.settings.result_video_path = out_path
             self.video_player.set_result_video(out_path)
+            self._update_stepper_states()
+            if getattr(self.project.settings, "notify_sound", True):
+                QApplication.beep()
+            self.notif_manager.notify(
+                "success",
+                "Export រួចរាល់",
+                f"វីដេអូត្រូវបាននាំចេញដោយជោគជ័យ៖ {Path(out_path).name}",
+                action_label="📂 បើកថត",
+                action_path=out_path,
+                persist=True,
+                tray=True,
+            )
             QMessageBox.information(
                 self,
                 "Export Complete",
@@ -1524,6 +2073,7 @@ class MainWindow(QMainWindow):
             if hasattr(self, "act_redo_srt"):
                 self.act_redo_srt.setEnabled(False)
             self.segment_table.populate(self.project)
+            self._update_stepper_states()
             self._do_autosave()
             backup_msg = f"\nBackup: {dlg.backup_path}" if dlg.backup_path else ""
             QMessageBox.information(
@@ -1657,7 +2207,12 @@ class MainWindow(QMainWindow):
                 break
 
     def _open_batch_dialog(self):
-        dlg = BatchQueueDialog(lang=self.lang, parent=self)
+        dlg = BatchQueueDialog(
+            lang=self.lang,
+            base_settings=self.project.settings,
+            project_glossary=self.project.glossary,
+            parent=self,
+        )
         dlg.exec()
 
     def _open_settings(self):
@@ -1672,11 +2227,17 @@ class MainWindow(QMainWindow):
                     self.cb_target_lang.setCurrentIndex(t_idx)
                 else:
                     self._on_target_lang_changed()
+            if hasattr(self, "seg_ai_speed"):
+                spd = getattr(self.project.settings, "ai_voice_speed", 1.05)
+                nearest = min([0.90, 1.00, 1.05, 1.15, 1.25], key=lambda v: abs(v - spd))
+                self.seg_ai_speed.set_value(nearest, emit=False)
             self._update_mixing_labels()
             self._on_data_changed()
 
     def _open_subtitle_mask_dialog(self):
         from app.ui.subtitle_mask_dialog import SubtitleMaskDialog
+        if hasattr(self, "video_player"):
+            self.video_player.ensure_live_mode()
         cur_time = 2.0
         if hasattr(self, "video_player") and hasattr(self.video_player, "get_current_time"):
             try:
@@ -1695,6 +2256,9 @@ class MainWindow(QMainWindow):
         if dlg.exec():
             if hasattr(self, "chk_mask_sub"):
                 self.chk_mask_sub.setChecked(self.project.settings.mask_subtitles)
+            if hasattr(self, "video_player"):
+                self._sync_overlays_to_player()
+                self.video_player.mark_result_stale(True)
             self.status_bar.showMessage(
                 "បានរក្សាទុកទីតាំងផ្ទាំងបិទបាំងអក្សរចិន (Subtitle Mask) រួចរាល់!"
                 if self.lang == "km" else
@@ -1710,9 +2274,10 @@ class MainWindow(QMainWindow):
             with open(srs_path, "r", encoding="utf-8") as f:
                 content = f.read()
         
+        from app.ui.theme import fit_dialog_to_screen
         dlg = QDialog(self)
         dlg.setWindowTitle("ឯកសារតម្រូវការប្រព័ន្ធ (Software Requirements Specification)")
-        dlg.resize(800, 600)
+        fit_dialog_to_screen(dlg, 800, 600)
         v = QVBoxLayout(dlg)
         from PySide6.QtWidgets import QTextBrowser
         tb = QTextBrowser()
@@ -1754,7 +2319,7 @@ class MainWindow(QMainWindow):
                 QPushButton {
                     background-color: #0284c7;
                     color: white;
-                    font-size: 11px;
+                    font-size: 8.5pt;
                     font-weight: bold;
                     border-radius: 4px;
                     padding: 2px 8px;
@@ -1779,6 +2344,9 @@ class MainWindow(QMainWindow):
             return
 
         self._cancel_requested = False
+        if hasattr(self, "lbl_task_name"):
+            self.lbl_task_name.setText(name)
+            self.lbl_task_name.setVisible(True)
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
         if hasattr(self, "btn_cancel_task"):
@@ -1799,11 +2367,33 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage("កំពុងបោះបង់ដំណើរការ...", 4000)
 
     def closeEvent(self, event):
+        try:
+            if "--self-test" not in sys.argv and os.environ.get("QT_QPA_PLATFORM") != "offscreen":
+                qs = QSettings("KhmerAIDubStudio", "AIMovieDubbing")
+                if not self.isMaximized() and not self.isMinimized():
+                    qs.setValue("main_window/rect", self.geometry())
+                if hasattr(self, "splitter"):
+                    qs.setValue("main_window/splitter", self.splitter.saveState())
+        except Exception:
+            pass
         if hasattr(self, "_current_worker") and self._current_worker and self._current_worker.isRunning():
             self._cancel_requested = True
             self.status_bar.showMessage("កំពុងរង់ចាំដំណើរការបញ្ចប់...")
             self._current_worker.wait(2000)
         event.accept()
+
+    def _on_screen_changed(self, screen):
+        self._apply_screen_constraints(screen)
+        self._update_responsive_header()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not getattr(self, "_screen_hook_connected", False):
+            wh = self.windowHandle()
+            if wh is not None:
+                wh.screenChanged.connect(self._on_screen_changed)
+                self._screen_hook_connected = True
+        self._update_responsive_header()
 
     def _on_worker_progress(self, pct: int, msg: str):
         self.progress_bar.setValue(pct)
@@ -1811,6 +2401,8 @@ class MainWindow(QMainWindow):
 
     def _on_worker_success(self, res, on_success_callback):
         self.progress_bar.setVisible(False)
+        if hasattr(self, "lbl_task_name"):
+            self.lbl_task_name.setVisible(False)
         if hasattr(self, "btn_cancel_task"):
             self.btn_cancel_task.setVisible(False)
         self.status_bar.showMessage("Ready")
@@ -1819,13 +2411,112 @@ class MainWindow(QMainWindow):
 
     def _on_worker_error(self, err_msg: str):
         self.progress_bar.setVisible(False)
+        if hasattr(self, "lbl_task_name"):
+            self.lbl_task_name.setVisible(False)
         if hasattr(self, "btn_cancel_task"):
             self.btn_cancel_task.setVisible(False)
         if "cancelled" in err_msg.lower():
             self.status_bar.showMessage("បានបោះបង់ដំណើរការ។", 5000)
             return
         self.status_bar.showMessage(f"Error: {err_msg[:40]}")
+        self.notif_manager.notify(
+            "error",
+            "ដំណើរការមានបញ្ហា",
+            err_msg[:220],
+            action_label="👁️ មើលលម្អិត",
+            persist=True,
+            action_cb=lambda m=err_msg: QMessageBox.critical(self, "Processing Error Details", m),
+        )
         QMessageBox.critical(self, "Processing Error", f"ដំណើរការមានបញ្ហា៖\n{err_msg}")
+
+    # --- Notification System UI Wiring ---
+    def _setup_notifications_ui(self):
+        if QSystemTrayIcon.isSystemTrayAvailable():
+            self.tray_icon = QSystemTrayIcon(self.windowIcon(), self)
+            self.tray_icon.setToolTip(STRINGS[self.lang]["app_title"])
+            self.tray_icon.show()
+
+        self.notif_manager.items_changed.connect(self._refresh_bell_badge)
+        self.notif_manager.toast_requested.connect(self._show_toast_item)
+        self.notif_manager.critical_requested.connect(self._show_critical_modal)
+        self.notif_manager.update_banner_requested.connect(self.update_banner.show_update)
+        self.notif_manager.tray_requested.connect(self._show_tray_alert)
+        self._refresh_bell_badge()
+
+    def _refresh_bell_badge(self):
+        if not hasattr(self, "btn_notifications"):
+            return
+        unread = self.notif_manager.unread_count()
+        if unread > 0:
+            self.btn_notifications.setText(f"🔔 {unread}")
+            self.btn_notifications.setStyleSheet("""
+                QPushButton {
+                    background-color: #7F1D1D;
+                    color: #FEF08A;
+                    border: 1px solid #EF4444;
+                    border-radius: 8px;
+                    padding: 4px 10px;
+                    font-weight: bold;
+                    font-size: 9pt;
+                }
+                QPushButton:hover { background-color: #991B1B; }
+            """)
+        else:
+            self.btn_notifications.setText("🔔")
+            self.btn_notifications.setStyleSheet("""
+                QPushButton {
+                    background-color: #162036;
+                    color: #E6ECF8;
+                    border: 1px solid #243350;
+                    border-radius: 8px;
+                    padding: 4px 10px;
+                    font-weight: bold;
+                    font-size: 9pt;
+                }
+                QPushButton:hover { border-color: #2D8CFF; }
+            """)
+
+    def _show_toast_item(self, item):
+        from app.ui.notification_ui import NotificationToastWidget
+        toast = NotificationToastWidget(item, self)
+        toast.clicked.connect(lambda _it: self._open_notification_center())
+        toast.closed.connect(self._on_toast_closed)
+        self._active_toast = toast
+        toast.show()
+        toast.raise_()
+
+    def _on_toast_closed(self):
+        self._active_toast = None
+        self.notif_manager.notify_toast_finished()
+
+    def _show_critical_modal(self, item):
+        QMessageBox.critical(
+            self,
+            f"‼️ {item.title}",
+            f"{item.body}\n\n(សូមចុច OK ដើម្បីទទួលស្គាល់)"
+        )
+        self.notif_manager.mark_read(item.id)
+
+    def _show_tray_alert(self, title: str, message: str):
+        if self.tray_icon and getattr(self.project.settings, "notify_windows_tray", True):
+            # Show tray notification especially when app is minimized or backgrounded
+            if self.isMinimized() or not self.isActiveWindow() or "Export" in title or "Batch" in title:
+                self.tray_icon.showMessage(title, message, QSystemTrayIcon.MessageIcon.Information, 5000)
+
+    def _open_notification_center(self):
+        from app.ui.notification_ui import NotificationCenterDialog
+        anchor = getattr(self, "btn_notifications", None)
+        dlg = NotificationCenterDialog(self.notif_manager, lang=self.lang, anchor_widget=anchor, parent=self)
+        dlg.exec()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update_responsive_header()
+        if getattr(self, "_active_toast", None) is not None:
+            try:
+                self._active_toast._reposition()
+            except Exception:
+                pass
 
     # --- Auto-Save & Recovery ---
     def _setup_autosave(self):
@@ -1865,4 +2556,4 @@ class MainWindow(QMainWindow):
             self.lbl_stats.setStyleSheet("color: #f43f5e; font-weight: bold;")
         else:
             self.lbl_stats.setText(f"{total} Segments")
-            self.lbl_stats.setStyleSheet("color: #94a3b8; font-size: 11px;")
+            self.lbl_stats.setStyleSheet("color: #94a3b8; font-size: 8.5pt;")

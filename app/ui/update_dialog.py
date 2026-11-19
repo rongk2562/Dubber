@@ -13,6 +13,7 @@ from PySide6.QtGui import QFont, QColor
 
 from app.config import APP_VERSION, APP_BUILD_DATE, GITHUB_RELEASES_URL
 from app.updater import UpdateInfo, CheckUpdateWorker, DownloadUpdateWorker, apply_update_and_restart
+from app.ui.theme import fit_dialog_to_screen
 
 
 class UpdateDialog(QDialog):
@@ -25,8 +26,7 @@ class UpdateDialog(QDialog):
         self._check_worker = None
         
         self.setWindowTitle("🔄 ពិនិត្យមើលកំណែថ្មី (Software Update)" if lang == "km" else "Software Update")
-        self.resize(540, 480)
-        self.setMinimumSize(480, 420)
+        fit_dialog_to_screen(self, 540, 480)
         self._init_ui()
 
         if self.update_info is None:
@@ -42,17 +42,17 @@ class UpdateDialog(QDialog):
         # Header Banner
         header = QHBoxLayout()
         self.lbl_icon = QLabel("🚀")
-        self.lbl_icon.setStyleSheet("font-size: 36px;")
+        self.lbl_icon.setStyleSheet("font-size: 27pt;")
         header.addWidget(self.lbl_icon)
 
         title_vbox = QVBoxLayout()
         title_vbox.setSpacing(2)
         self.lbl_title = QLabel("ពិនិត្យមើលកំណែថ្មី (Check for Updates)" if self.lang == "km" else "Check for Updates")
-        self.lbl_title.setStyleSheet("font-size: 16px; font-weight: bold; color: #f8fafc;")
+        self.lbl_title.setStyleSheet("font-size: 12pt; font-weight: bold; color: #f8fafc;")
         title_vbox.addWidget(self.lbl_title)
 
         self.lbl_subtitle = QLabel(f"កំណែបច្ចុប្បន្ន៖ v{APP_VERSION} (Build: {APP_BUILD_DATE})")
-        self.lbl_subtitle.setStyleSheet("font-size: 11px; color: #94a3b8;")
+        self.lbl_subtitle.setStyleSheet("font-size: 8.5pt; color: #94a3b8;")
         title_vbox.addWidget(self.lbl_subtitle)
         header.addLayout(title_vbox, stretch=1)
         layout.addLayout(header)
@@ -71,20 +71,20 @@ class UpdateDialog(QDialog):
         badge_layout.setContentsMargins(12, 8, 12, 8)
 
         self.lbl_badge_curr = QLabel(f"📦 របស់អ្នក៖ v{APP_VERSION}")
-        self.lbl_badge_curr.setStyleSheet("color: #cbd5e1; font-weight: bold; font-size: 12px;")
+        self.lbl_badge_curr.setStyleSheet("color: #cbd5e1; font-weight: bold; font-size: 9pt;")
         badge_layout.addWidget(self.lbl_badge_curr)
 
         badge_layout.addStretch()
 
         self.lbl_badge_latest = QLabel("កំពុងពិនិត្យ...")
-        self.lbl_badge_latest.setStyleSheet("color: #38bdf8; font-weight: bold; font-size: 12px;")
+        self.lbl_badge_latest.setStyleSheet("color: #38bdf8; font-weight: bold; font-size: 9pt;")
         badge_layout.addWidget(self.lbl_badge_latest)
 
         layout.addWidget(self.badge_frame)
 
         # Changelog / Information Text Browser
         lbl_notes = QLabel("📝 កំណត់ត្រាការផ្លាស់ប្ដូរ (Changelog):" if self.lang == "km" else "Release Notes:")
-        lbl_notes.setStyleSheet("font-weight: bold; color: #e2e8f0; font-size: 12px;")
+        lbl_notes.setStyleSheet("font-weight: bold; color: #e2e8f0; font-size: 9pt;")
         layout.addWidget(lbl_notes)
 
         self.txt_notes = QTextBrowser()
@@ -96,7 +96,7 @@ class UpdateDialog(QDialog):
                 border-radius: 6px;
                 padding: 10px;
                 font-family: 'Kantumruy Pro', 'Segoe UI', sans-serif;
-                font-size: 12px;
+                font-size: 9pt;
                 line-height: 1.5;
             }
         """)
@@ -116,7 +116,7 @@ class UpdateDialog(QDialog):
                 height: 18px;
                 text-align: center;
                 color: white;
-                font-size: 10px;
+                font-size: 7.5pt;
                 font-weight: bold;
             }
             QProgressBar::chunk {
@@ -128,7 +128,7 @@ class UpdateDialog(QDialog):
         layout.addWidget(self.progress_bar)
 
         self.lbl_progress_status = QLabel("")
-        self.lbl_progress_status.setStyleSheet("color: #38bdf8; font-size: 11px;")
+        self.lbl_progress_status.setStyleSheet("color: #38bdf8; font-size: 8.5pt;")
         self.lbl_progress_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.lbl_progress_status.setVisible(False)
         layout.addWidget(self.lbl_progress_status)
@@ -190,7 +190,7 @@ class UpdateDialog(QDialog):
         self.lbl_icon.setText("✅")
         self.lbl_title.setText("អ្នកកំពុងប្រើប្រាស់កំណែចុងក្រោយបំផុត!" if self.lang == "km" else "You are up to date!")
         self.lbl_badge_latest.setText(f"✨ ចុងក្រោយបំផុត៖ v{curr_v}")
-        self.lbl_badge_latest.setStyleSheet("color: #10b981; font-weight: bold; font-size: 12px;")
+        self.lbl_badge_latest.setStyleSheet("color: #10b981; font-weight: bold; font-size: 9pt;")
         
         self.txt_notes.setHtml(
             f"<div style='color: #94a3b8; padding: 10px; text-align: center;'>"
@@ -204,7 +204,7 @@ class UpdateDialog(QDialog):
         self.lbl_icon.setText("⚠️")
         self.lbl_title.setText("មិនអាចពិនិត្យកំណែថ្មីបានទេ" if self.lang == "km" else "Could not check for updates")
         self.lbl_badge_latest.setText("បរាជ័យ (Offline)")
-        self.lbl_badge_latest.setStyleSheet("color: #f43f5e; font-weight: bold; font-size: 12px;")
+        self.lbl_badge_latest.setStyleSheet("color: #f43f5e; font-weight: bold; font-size: 9pt;")
         self.txt_notes.setPlainText(
             f"ដំណើរការពិនិត្យមើលកំណែថ្មីមិនជោគជ័យ៖\n{err_msg}\n\n"
             f"សូមពិនិត្យមើលការតភ្ជាប់អ៊ីនធឺណិត ឬទាញយកដោយផ្ទាល់តាមរយៈទំព័រ GitHub Releases។"
@@ -220,14 +220,14 @@ class UpdateDialog(QDialog):
             self.lbl_icon.setText("🎉")
             self.lbl_title.setText(f"មានកំណែថ្មី v{info.latest_version} រួចរាល់!" if self.lang == "km" else f"Version {info.latest_version} Available!")
             self.lbl_badge_latest.setText(f"🚀 កំណែថ្មី៖ v{info.latest_version}")
-            self.lbl_badge_latest.setStyleSheet("color: #38bdf8; font-weight: bold; font-size: 12px;")
+            self.lbl_badge_latest.setStyleSheet("color: #38bdf8; font-weight: bold; font-size: 9pt;")
 
             notes = info.changelog_km or info.changelog_en or "ការកែលម្អទូទៅ និងការជួសជុលបញ្ហា (General improvements & bug fixes)"
             formatted_notes = notes.replace("\n", "<br>")
 
             self.txt_notes.setHtml(
                 f"<div style='color: #f1f5f9;'>"
-                f"<b style='color: #38bdf8; font-size: 13px;'>កំណែថ្មី Version {info.latest_version}</b> "
+                f"<b style='color: #38bdf8; font-size: 9.75pt;'>កំណែថ្មី Version {info.latest_version}</b> "
                 f"<span style='color: #94a3b8;'>({info.release_date})</span><br><br>"
                 f"{formatted_notes}"
                 f"</div>"

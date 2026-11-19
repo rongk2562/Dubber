@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "items": [
+    {
+      "id": "2026-11-19-welcome-v1-4-0",
+      "type": "update",
+      "title": {
+        "km": "ស្វាគមន៍មកកាន់ AI Movie Dubbing Studio v1.4.0",
+        "en": "Welcome to AI Movie Dubbing Studio v1.4.0"
+      },
+      "body": {
+        "km": "មុខងារថ្មីៗ v1.4.0៖ **Batch Mode (ទាំង Folder)**, **OpenAI / ChatGPT (STT & Batch Translate)**, **Audio Mix & Mask ក្នុង Batch**, និងល្បឿន OCR / បកប្រែ / TTS លឿនជាងមុនខ្លាំង!",
+        "en": "What's new in v1.4.0: **Full-Folder Batch Mode**, **OpenAI / ChatGPT (STT & Batch Translate)**, **Batch Audio Mix & Subtitle Mask**, and major OCR/Translation/TTS speedups!"
+      },
+      "link": {
+        "url": "https://github.com/rongk2562/Dubber/releases",
+        "label": {
+          "km": "មើលព័ត៌មានបន្ថែម",
+          "en": "View Releases"
+        }
+      },
+      "publish_at": "2026-11-19T00:00:00Z",
+      "expire_at": "2027-11-19T00:00:00Z",
+      "min_app_version": "1.0.0",
+      "max_app_version": "",
+      "pinned": true,
+      "show_once": true
+    }
+  ],
+  "latest_version": {
+    "version": "1.4.0",
+    "notes": {
+      "km": "កំណែ v1.4.0: Batch Folder Mode, OpenAI/ChatGPT, Audio Mix & Mask ក្នុង Batch, ល្បឿនលឿនជាងមុន",
+      "en": "v1.4.0: Batch Folder Mode, OpenAI/ChatGPT, Batch Audio Mix & Mask, Major Speedups"
+    },
+    "url": "https://github.com/rongk2562/Dubber/releases"
+  }
+}

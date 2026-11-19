@@ -124,7 +124,17 @@ class SubtitleOcrEngine:
                     self.engine_name = "rapidocr"
         if self.engine_name == "rapidocr" and self._rapid_ocr is None:
             from rapidocr_onnxruntime import RapidOCR
-            self._rapid_ocr = RapidOCR()
+            ocr = RapidOCR()
+            ocr.use_angle_cls = False
+            # Prevent RapidOCR default limit_type='min', limit_side_len=736 from upscaling wide subtitle
+            # strips (e.g. 960x140 -> 5047x736) which causes 15-38s/frame CPU bottlenecks!
+            try:
+                op0 = ocr.text_detector.preprocess_op[0]
+                op0.limit_type = "max"
+                op0.limit_side_len = 960
+            except Exception:
+                pass
+            self._rapid_ocr = ocr
 
     def _run_ocr_on_crop(self, img_rgb: np.ndarray) -> List[Tuple[str, float, float, float]]:
         """
@@ -144,15 +154,18 @@ class SubtitleOcrEngine:
                     cy = sum(pt[1] for pt in box) / (4.0 * max(1, h))
                     results.append((str(txt), float(conf), cx, cy))
         elif self._rapid_ocr is not None:
-            # Upscale small subtitle crops (e.g. 576p/720p) by 2x for crisp CJK recognition
+            # Only modestly upscale genuinely small/low-res subtitle strips; avoid huge 2x wide tensors
             img_bgr = img_rgb[:, :, ::-1].copy()
-            if h < 220:
+            if w < 640 and h < 120:
                 import cv2
-                img_bgr = cv2.resize(img_bgr, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
+                img_bgr = cv2.resize(img_bgr, None, fx=1.5, fy=1.5, interpolation=cv2.INTER_CUBIC)
                 uh, uw = img_bgr.shape[:2]
             else:
                 uh, uw = h, w
-            res, _ = self._rapid_ocr(img_bgr)
+            try:
+                res, _ = self._rapid_ocr(img_bgr, use_cls=False)
+            except TypeError:
+                res, _ = self._rapid_ocr(img_bgr)
             if res:
                 for item in res:
                     box, txt, conf = item[0], item[1], item[2]
@@ -183,8 +196,8 @@ class SubtitleOcrEngine:
         else:
             x_pct, y_pct, w_pct, h_pct = 0.0, 75.0, 100.0, 22.0
 
-        # Add safety padding around configured mask band so top/bottom of hardcoded subs aren't clipped
-        pad_y = 7.0
+        # Add moderate safety padding around configured mask band without pulling in moving scene background
+        pad_y = 4.0
         y1_pct = max(0.0, y_pct - pad_y)
         y2_pct = min(100.0, y_pct + h_pct + pad_y)
         x1_pct = max(0.0, x_pct)
@@ -201,10 +214,11 @@ class SubtitleOcrEngine:
         video_path: str,
         settings: Optional[ProjectSettings] = None,
         custom_roi: Optional[Tuple[float, float, float, float]] = None,
-        sample_count: int = 10,
+        sample_count: int = 8,
+        cancel_cb: Optional[Callable[[], bool]] = None,
     ) -> bool:
         """
-        Quick probe for Auto mode: samples ~10 frames evenly across the video ROI.
+        Fast probe for Auto mode: seeks directly to ~8 evenly spaced timestamps across the video ROI.
         Returns True if hardcoded Chinese subtitles are detected in >= 2 frames.
         """
         import av
@@ -218,26 +232,69 @@ class SubtitleOcrEngine:
                 if duration <= 0.5:
                     duration = 30.0
                 step = max(1.0, duration / float(sample_count + 1))
-                next_t = step
-                for frame in container.decode(video=0):
-                    if frame.pts is None:
-                        continue
-                    t = float(frame.pts * tb)
-                    if t < next_t:
-                        continue
-                    next_t = t + step
-                    arr = frame.to_ndarray(format="rgb24")
-                    fh, fw = arr.shape[:2]
-                    x1, y1, x2, y2 = self.get_roi_bounds(fw, fh, settings, custom_roi)
-                    crop = arr[y1:y2, x1:x2]
-                    dets = self._run_ocr_on_crop(crop)
-                    for txt, conf, _, _ in dets:
-                        clean = _clean_ocr_chinese_text(txt, self._opencc)
-                        if conf >= 0.6 and len(_strip_punct_and_spaces(clean)) >= 2 and _has_cjk(clean):
-                            hits += 1
+                targets = [round(step * (i + 1), 2) for i in range(sample_count)]
+
+                used_seek = False
+                for target_t in targets:
+                    if cancel_cb and cancel_cb():
+                        return False
+                    try:
+                        seek_pts = int(max(0.0, target_t - 0.5) / tb)
+                        container.seek(seek_pts, stream=stream, any_frame=False, backward=True)
+                        used_seek = True
+                        decoded_one = False
+                        for frame in container.decode(video=0):
+                            if cancel_cb and cancel_cb():
+                                return False
+                            if frame.pts is None:
+                                continue
+                            t = float(frame.pts * tb)
+                            if t + 0.15 < target_t:
+                                continue
+                            arr = frame.to_ndarray(format="rgb24")
+                            fh, fw = arr.shape[:2]
+                            x1, y1, x2, y2 = self.get_roi_bounds(fw, fh, settings, custom_roi)
+                            crop = arr[y1:y2, x1:x2]
+                            dets = self._run_ocr_on_crop(crop)
+                            for txt, conf, _, _ in dets:
+                                clean = _clean_ocr_chinese_text(txt, self._opencc)
+                                if conf >= 0.6 and len(_strip_punct_and_spaces(clean)) >= 2 and _has_cjk(clean):
+                                    hits += 1
+                                    break
+                            decoded_one = True
                             break
-                    if hits >= 2 or next_t >= duration:
+                        if hits >= 2:
+                            return True
+                        if not decoded_one and not used_seek:
+                            break
+                    except Exception:
+                        used_seek = False
                         break
+
+                if not used_seek:
+                    container.seek(0)
+                    next_t = step
+                    for frame in container.decode(video=0):
+                        if cancel_cb and cancel_cb():
+                            return False
+                        if frame.pts is None:
+                            continue
+                        t = float(frame.pts * tb)
+                        if t < next_t:
+                            continue
+                        next_t = t + step
+                        arr = frame.to_ndarray(format="rgb24")
+                        fh, fw = arr.shape[:2]
+                        x1, y1, x2, y2 = self.get_roi_bounds(fw, fh, settings, custom_roi)
+                        crop = arr[y1:y2, x1:x2]
+                        dets = self._run_ocr_on_crop(crop)
+                        for txt, conf, _, _ in dets:
+                            clean = _clean_ocr_chinese_text(txt, self._opencc)
+                            if conf >= 0.6 and len(_strip_punct_and_spaces(clean)) >= 2 and _has_cjk(clean):
+                                hits += 1
+                                break
+                        if hits >= 2 or next_t >= duration:
+                            break
         except Exception as e:
             print(f"[OCR] Auto-detect probe warning: {e}")
         return hits >= 2
@@ -267,6 +324,9 @@ class SubtitleOcrEngine:
         step_sec = 1.0 / scan_fps
         raw_frames: List[Tuple[float, List[OcrFrameDetection]]] = []
 
+        if progress_cb:
+            progress_cb(1, "កំពុងរៀបចំម៉ាស៊ីនស្កេន OCR...")
+
         with av.open(video_path) as container:
             stream = container.streams.video[0]
             stream.thread_type = "AUTO"
@@ -277,6 +337,9 @@ class SubtitleOcrEngine:
 
             next_sample_t = 0.0
             last_pct = -1
+            prev_thumb = None
+            prev_frame_dets: List[OcrFrameDetection] = []
+            last_ocr_t = -999.0
 
             for frame in container.decode(video=0):
                 if cancel_cb and cancel_cb():
@@ -294,21 +357,45 @@ class SubtitleOcrEngine:
                 x1, y1, x2, y2 = self.get_roi_bounds(fw, fh, settings, custom_roi)
                 crop = arr[y1:y2, x1:x2]
 
-                dets = self._run_ocr_on_crop(crop)
-                frame_dets: List[OcrFrameDetection] = []
-                for txt, conf, cx, cy in dets:
-                    clean = _clean_ocr_chinese_text(txt, self._opencc)
-                    core_len = len(_strip_punct_and_spaces(clean))
-                    if conf >= min_conf and core_len >= min_chars and _has_cjk(clean):
-                        frame_dets.append(
-                            OcrFrameDetection(
-                                timestamp=round(t, 3),
-                                text=clean,
-                                confidence=conf,
-                                box_cx=cx,
-                                box_cy=cy,
-                            )
+                # Skip redundant ONNX inference when subtitle ROI hasn't visibly changed
+                thumb = crop[::3, ::3].mean(axis=2).astype(np.int16) if crop.size else None
+                if (
+                    thumb is not None
+                    and prev_thumb is not None
+                    and thumb.shape == prev_thumb.shape
+                    and (t - last_ocr_t) < 0.65
+                    and float(np.mean(np.abs(thumb - prev_thumb))) < 1.3
+                ):
+                    frame_dets = [
+                        OcrFrameDetection(
+                            timestamp=round(t, 3),
+                            text=d.text,
+                            confidence=d.confidence,
+                            box_cx=d.box_cx,
+                            box_cy=d.box_cy,
                         )
+                        for d in prev_frame_dets
+                    ]
+                else:
+                    dets = self._run_ocr_on_crop(crop)
+                    frame_dets = []
+                    for txt, conf, cx, cy in dets:
+                        clean = _clean_ocr_chinese_text(txt, self._opencc)
+                        core_len = len(_strip_punct_and_spaces(clean))
+                        if conf >= min_conf and core_len >= min_chars and _has_cjk(clean):
+                            frame_dets.append(
+                                OcrFrameDetection(
+                                    timestamp=round(t, 3),
+                                    text=clean,
+                                    confidence=conf,
+                                    box_cx=cx,
+                                    box_cy=cy,
+                                )
+                            )
+                    prev_thumb = thumb
+                    prev_frame_dets = frame_dets
+                    last_ocr_t = t
+
                 raw_frames.append((round(t, 3), frame_dets))
 
                 pct = min(90, int((t / total_dur) * 90))

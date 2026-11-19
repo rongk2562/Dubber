@@ -225,9 +225,9 @@ def get_voice_actor_name(voice_id: str) -> str:
 # Translation Providers
 TRANSLATION_PROVIDERS = [
     ("google", "Google Translate (Free / Web - លំនាំដើមចាស់ មិនបាច់ប្រើ Key)"),
+    ("openai", "ChatGPT / OpenAI (API)"),
     ("gemini", "Google Gemini 1.5 Flash (AI Studio - ណែនាំសម្រាប់ភាពយន្ត)"),
     ("claude", "Anthropic Claude (API)"),
-    ("openai", "OpenAI GPT-4o (API)"),
     ("offline", "Manual / Offline Mode"),
 ]
 
@@ -248,11 +248,26 @@ DEFAULT_DUCKING_FADE_MS = 250 # ms fade in / fade out for ducking
 
 # Application Version & Update Configuration
 APP_NAME = "AI Movie Translator & Auto Dubbing Studio"
-APP_VERSION = "1.3.1"
+APP_VERSION = "1.4.0"
 APP_BUILD_DATE = "2026-11-19"
 DEFAULT_UPDATE_URL = "https://raw.githubusercontent.com/rongk2562/Dubber/main/version.json"
 LOCAL_UPDATE_URL = "http://localhost:5000/api/version"
 GITHUB_RELEASES_URL = "https://github.com/rongk2562/Dubber/releases"
+
+# Remote Developer Announcements & Security Configuration (Ed25519 Signed JSON over HTTPS)
+NOTIFICATION_FEED_URL = "https://raw.githubusercontent.com/rongk2562/Dubber/main/notifications.json"
+NOTIFICATION_SIG_URL = "https://raw.githubusercontent.com/rongk2562/Dubber/main/notifications.sig"
+NOTIFICATION_PUBLIC_KEY_B64 = "obODyzVpoEvG4FRwZYuNpHcoIL4HFXbBEsPAtTpKUpM="
+NOTIFICATION_LINK_ALLOWLIST = (
+    "github.com",
+    "raw.githubusercontent.com",
+    "rongk2562.github.io",
+    "aistudio.google.com",
+    "t.me",
+    "youtube.com",
+)
+NOTIFICATION_MAX_BYTES = 262144   # 256 KB max feed payload
+NOTIFICATION_MAX_ITEMS = 50       # Max items processed per feed
 
 # Bilingual Localization Strings (English & Khmer)
 STRINGS = {
@@ -366,6 +381,46 @@ STRINGS = {
         "sync_borrowed": "Gap Borrowed",
         "sync_time_stretched": "Time Stretched",
         "sync_overflow": "OVERFLOW (Needs Review)",
+
+        # Batch Mode & OpenAI / ChatGPT (v1.4.0)
+        "batch_menu": "📦 Batch (Folder)...",
+        "batch_title": "Batch Folder Processing Queue",
+        "batch_in_folder": "Input Folder:",
+        "batch_out_folder": "Output Folder:",
+        "batch_include_sub": "Include subfolders",
+        "batch_scan": "🔍 Scan Videos",
+        "batch_skip_done": "Skip already completed episodes",
+        "batch_overwrite": "Overwrite existing outputs",
+        "batch_start": "▶ Start",
+        "batch_pause": "⏸ Pause",
+        "batch_resume": "▶ Resume",
+        "batch_cancel": "⏹ Cancel",
+        "batch_retry_failed": "🔁 Retry Failed",
+        "batch_clear": "🧹 Clear",
+        "batch_clear_confirm_title": "Clear Batch Queue",
+        "batch_clear_confirm_msg": "Are you sure you want to clear all items from the queue?",
+        "batch_clear_log": "🧹 Clear Log",
+        "batch_mask_group": "3. Original Subtitle Mask",
+        "batch_mask_enable": "Enable Original Subtitle Mask",
+        "batch_mask_btn": "⚙ Mask Position...",
+        "batch_mask_mode_normal": "Use Normal Mode Settings",
+        "batch_mask_mode_custom": "Use Custom Settings for This Batch",
+        "batch_mask_episode_override": "⚙ Custom Mask for This Episode...",
+        "batch_mask_episode_clear": "🔄 Reset to Shared Batch Mask",
+        "batch_audio_group": "4. Audio Mix",
+        "batch_audio_orig": "Original Voice",
+        "batch_audio_bg": "Music / SFX",
+        "batch_audio_ai": "AI Voice",
+        "batch_audio_speed": "AI Voice Speed:",
+        "batch_audio_preview": "🔊 Preview (12s)",
+        "batch_audio_preview_stop": "⏹ Stop Preview",
+        "batch_audio_mode_normal": "Use Normal Mode Settings",
+        "batch_audio_mode_custom": "Use Custom Batch Settings",
+        "batch_audio_episode_override": "🎛️ Custom Audio Mix for This Episode...",
+        "batch_audio_episode_clear": "🔄 Reset to Shared Batch Audio Mix",
+        "batch_audio_both_muted_warn": "Both Original Voice and Music/SFX are OFF — output will contain AI voice only.",
+        "batch_audio_no_track": "Video has no original audio track — skipping background mix.",
+        "openai_section": "OpenAI / ChatGPT",
     },
     
     "km": {
@@ -478,5 +533,45 @@ STRINGS = {
         "sync_borrowed": "បានខ្ចីចន្លោះទំនេរ",
         "sync_time_stretched": "បានបង្រួមពេលវេលា",
         "sync_overflow": "ហួសកំណត់ (ត្រូវការពិនិត្យ)",
+
+        # Batch Mode & OpenAI / ChatGPT (v1.4.0)
+        "batch_menu": "📦 Batch (ទាំង Folder)...",
+        "batch_title": "ដំណើរការជាបាច់ទាំង Folder (Batch Mode)",
+        "batch_in_folder": "ថតវីដេអូចូល:",
+        "batch_out_folder": "ថតលទ្ធផលចេញ:",
+        "batch_include_sub": "រួមទាំង subfolder",
+        "batch_scan": "🔍 ស្កេនវីដេអូ",
+        "batch_skip_done": "រំលងភាគដែលរួចរាល់ហើយ",
+        "batch_overwrite": "សរសេរជាន់លើឯកសារចាស់",
+        "batch_start": "▶ ចាប់ផ្ដើម",
+        "batch_pause": "⏸ ផ្អាក",
+        "batch_resume": "▶ បន្ត",
+        "batch_cancel": "⏹ បោះបង់",
+        "batch_retry_failed": "🔁 សាកល្បងឡើងវិញ (Failed)",
+        "batch_clear": "🧹 សម្អាត (Clear)",
+        "batch_clear_confirm_title": "សម្អាតបញ្ជី Batch",
+        "batch_clear_confirm_msg": "តើអ្នកចង់សម្អាតបញ្ជីទាំងអស់មែនទេ?",
+        "batch_clear_log": "🧹 សម្អាត Log",
+        "batch_mask_group": "៣. បិទបាំងអក្សរចិនដើម",
+        "batch_mask_enable": "បើកការបិទបាំងអក្សរចិនដើម",
+        "batch_mask_btn": "⚙ កំណត់ទីតាំងផ្ទាំងបិទបាំង...",
+        "batch_mask_mode_normal": "ប្រើ settings ដូចរបៀបធម្មតា",
+        "batch_mask_mode_custom": "ប្រើ settings ផ្ទាល់សម្រាប់ Batch នេះ",
+        "batch_mask_episode_override": "⚙ កំណត់ទីតាំងបិទបាំងផ្ទាល់សម្រាប់ភាគនេះ...",
+        "batch_mask_episode_clear": "🔄 ត្រឡប់ទៅ settings បិទបាំងរួមវិញ",
+        "batch_audio_group": "៤. សំឡេង (Audio Mix)",
+        "batch_audio_orig": "សំឡេងដើម",
+        "batch_audio_bg": "ភ្លេង / SFX",
+        "batch_audio_ai": "សំឡេង AI",
+        "batch_audio_speed": "ល្បឿនសំឡេង AI:",
+        "batch_audio_preview": "🔊 ស្តាប់សាកល្បង (Preview)",
+        "batch_audio_preview_stop": "⏹ បញ្ឈប់ Preview",
+        "batch_audio_mode_normal": "ប្រើ settings ដូចរបៀបធម្មតា",
+        "batch_audio_mode_custom": "settings ផ្ទាល់សម្រាប់ Batch",
+        "batch_audio_episode_override": "🎛️ កំណត់សំឡេងផ្ទាល់សម្រាប់ភាគនេះ...",
+        "batch_audio_episode_clear": "🔄 ត្រឡប់ទៅ settings សំឡេងរួមវិញ",
+        "batch_audio_both_muted_warn": "សំឡេងដើម និង ភ្លេង/SFX ត្រូវបានបិទទាំងពីរ — វីដេអូនឹងមានតែសំឡេង AI ប៉ុណ្ណោះ។",
+        "batch_audio_no_track": "វីដេអូគ្មាន audio track ដើមទេ — នឹងរំលងការលាយសំឡេងដើម។",
+        "openai_section": "OpenAI / ChatGPT",
     }
 }

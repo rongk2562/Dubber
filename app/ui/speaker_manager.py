@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal
 from app.models import Project, Speaker
 from app.config import KHMER_VOICES
+from app.ui.theme import fit_dialog_to_screen
 
 class SpeakerManagerDialog(QDialog):
     speakers_updated = Signal()
@@ -20,7 +21,7 @@ class SpeakerManagerDialog(QDialog):
         self.project = project
         self.lang = lang
         self.setWindowTitle("ការកំណត់សំឡេងតាមតួអង្គ (Speaker Voice Assignment)" if lang == "km" else "Speaker Voice Assignment")
-        self.resize(550, 380)
+        fit_dialog_to_screen(self, 550, 380)
         self._init_ui()
         self._populate()
 

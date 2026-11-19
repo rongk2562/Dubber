@@ -1,0 +1,19 @@
+2026-11-19 20:03:36,755 [INFO] khmer_dub_studio.openai_client: OpenAI batch translation done (gpt-4o-mini): 3 lines, 200+100 tokens (~$0.00020)
+2026-11-19 20:03:51,167 [INFO] khmer_dub_studio.openai_client: OpenAI batch translation done (gpt-4o-mini): 3 lines, 200+100 tokens (~$0.00020)
+2026-11-19 20:04:26,109 [INFO] khmer_dub_studio.openai_client: OpenAI batch translation done (gpt-4o-mini): 3 lines, 200+100 tokens (~$0.00020)
+2026-11-19 20:06:28,715 [INFO] khmer_dub_studio.openai_client: OpenAI batch translation done (gpt-4o-mini): 3 lines, 200+100 tokens (~$0.00020)
+2026-11-19 20:12:42,331 [ERROR] khmer_dub_studio.batch_engine: Batch item failed (少夫人来自东北3 001.mp4): សូមបញ្ចូល OpenAI API Key ក្នុង Settings → OpenAI / ChatGPT ជាមុនសិន!
+2026-11-19 20:12:51,694 [ERROR] khmer_dub_studio.batch_engine: Batch item failed (少夫人来自东北3 002.mp4): សូមបញ្ចូល OpenAI API Key ក្នុង Settings → OpenAI / ChatGPT ជាមុនសិន!
+2026-11-19 20:13:07,901 [ERROR] khmer_dub_studio.batch_engine: Batch item failed (少夫人来自东北3 003.mp4): សូមបញ្ចូល OpenAI API Key ក្នុង Settings → OpenAI / ChatGPT ជាមុនសិន!
+2026-11-19 20:13:21,417 [ERROR] khmer_dub_studio.batch_engine: Batch item failed (少夫人来自东北3 004.mp4): សូមបញ្ចូល OpenAI API Key ក្នុង Settings → OpenAI / ChatGPT ជាមុនសិន!
+2026-11-19 20:40:06,115 [INFO] khmer_dub_studio.openai_client: OpenAI batch translation done (gpt-4o-mini): 3 lines, 200+100 tokens (~$0.00020)
+2026-11-19 20:40:39,335 [INFO] khmer_dub_studio.openai_client: OpenAI batch translation done (gpt-4o-mini): 3 lines, 200+100 tokens (~$0.00020)
+2026-11-19 21:03:52,894 [INFO] khmer_dub_studio.openai_client: OpenAI batch translation done (gpt-4o-mini): 3 lines, 200+100 tokens (~$0.00020)
+2026-11-19 21:19:49,404 [INFO] khmer_dub_studio.openai_client: OpenAI batch translation done (gpt-4o-mini): 3 lines, 200+100 tokens (~$0.00020)
+2026-11-19 21:32:18,060 [INFO] khmer_dub_studio.openai_client: OpenAI batch translation done (gpt-4o-mini): 3 lines, 200+100 tokens (~$0.00020)
+2026-11-19 21:32:42,175 [INFO] khmer_dub_studio.openai_client: OpenAI batch translation done (gpt-4o-mini): 3 lines, 200+100 tokens (~$0.00020)
+2026-11-19 22:22:04,232 [INFO] khmer_dub_studio.openai_client: OpenAI batch translation done (gpt-4o-mini): 3 lines, 200+100 tokens (~$0.00020)
+2026-11-19 22:38:33,294 [INFO] khmer_dub_studio.openai_client: OpenAI batch translation done (gpt-4o-mini): 3 lines, 200+100 tokens (~$0.00020)
+2026-11-19 22:38:53,939 [INFO] khmer_dub_studio.openai_client: OpenAI batch translation done (gpt-4o-mini): 3 lines, 200+100 tokens (~$0.00020)
+2026-11-19 22:54:54,369 [INFO] khmer_dub_studio.openai_client: OpenAI batch translation done (gpt-4o-mini): 3 lines, 200+100 tokens (~$0.00020)
+2026-11-19 23:20:47,467 [INFO] khmer_dub_studio.openai_client: OpenAI batch translation done (gpt-4o-mini): 3 lines, 200+100 tokens (~$0.00020)

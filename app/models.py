@@ -133,7 +133,13 @@ class ProjectSettings:
     translation_provider: str = "google"
     gemini_api_key: str = ""
     claude_api_key: str = ""
-    openai_api_key: str = ""
+    openai_api_key: str = ""         # Kept in memory only; persisted via OS credential store
+    openai_base_url: str = "https://api.openai.com/v1"
+    openai_stt_model: str = "whisper-1"
+    openai_trans_model: str = "gpt-4o-mini"
+    openai_custom_prompt: str = ""
+    openai_fallback_google: bool = True
+    openai_concurrency: int = 2
     original_volume: float = 0.3    # Legacy volume factor 0.0 to 1.5
     original_voice_volume: float = 0.0 # Dedicated Original Voice (Vocals) volume (0.0 to 1.0)
     background_volume: float = 0.30 # Dedicated Background (Music/SFX) volume (0.0 to 1.0)
@@ -150,6 +156,10 @@ class ProjectSettings:
     mask_x_percent: float = 0.0     # Mask horizontal position (percentage 0.0 to 50.0%)
     mask_opacity: float = 0.95      # Mask band opacity (0.2 to 1.0, 1.0 = solid opaque black)
     mask_color: str = "black"       # "black", "dark_gray", "navy"
+    mask_style: str = "solid"       # "solid" or "blur"
+    mask_blur_strength: int = 40    # Blur strength 1 to 100 (default 40 -> sigma ~18 at 720p)
+    mask_blur_dim: int = 25         # Extra dim percentage 0 to 60%
+    mask_feather: bool = False      # Soften edges of blur band (default OFF)
     subtitle_font: str = "Noto Sans Khmer" # Default Noto Sans Khmer
     subtitle_font_size: int = 20    # Subtitle font size in px (12 to 36)
     subtitle_margin_v: int = 25     # Subtitle bottom margin in px (5 to 100)
@@ -157,11 +167,15 @@ class ProjectSettings:
     ui_language: str = "km"         # "km" or "en"
     logo_enabled: bool = False      # Overlay custom logo / watermark
     logo_path: str = ""             # Image path (png, jpg, webp)
-    logo_position: str = "top_right"# "top_right", "top_left", "bottom_right", "bottom_left", "center"
-    logo_width: int = 120           # Logo width in pixels (40 to 350)
+    logo_position: str = "top_right"# "top_right", "top_left", "bottom_right", "bottom_left", "center", "custom"
+    logo_width: int = 120           # Legacy pixel width fallback (for old saves)
+    logo_width_pct: float = 12.0    # Logo width as % of video width (5.0 to 40.0)
     logo_opacity: float = 0.90      # Transparency factor (0.1 to 1.0)
-    logo_margin_x: int = 20         # Margin from horizontal edge
-    logo_margin_y: int = 20         # Margin from vertical edge
+    logo_margin_pct: float = 2.5    # Margin from edge as % of min(video_w, video_h) (0.0 to 10.0)
+    logo_custom_x_pct: float = -1.0 # Custom dragged X % of video width (when logo_position == "custom")
+    logo_custom_y_pct: float = -1.0 # Custom dragged Y % of video height (when logo_position == "custom")
+    logo_margin_x: int = 20         # Legacy pixel margin X
+    logo_margin_y: int = 20         # Legacy pixel margin Y
     ai_voice_speed: float = 1.05    # Default AI voice speed factor (0.5 to 2.0)
     result_video_path: str = ""     # Output path of the generated result video
     auto_check_updates: bool = True # Automatically check for updates on startup
@@ -170,14 +184,23 @@ class ProjectSettings:
     ocr_engine: str = "rapidocr"    # "rapidocr", "paddleocr"
     ocr_fps: float = 5.0            # Frames per second to scan for hardcoded subtitles
     use_ocr_timestamps: bool = True # Use OCR start/end timestamps (or snap to VAD)
+    notify_enabled: bool = True     # Receive developer announcements
+    notify_show_toast: bool = True  # Show in-app floating toast
+    notify_windows_tray: bool = True # Show Windows tray notification
+    notify_interval_hours: int = 6  # Polling interval (1, 6, or 24 hours)
+    notify_sound: bool = True       # Play subtle sound on export/batch completion
 
     def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
+        d = asdict(self)
+        # Never persist OpenAI API key as plaintext inside project/autosave JSON
+        d["openai_api_key"] = ""
+        return d
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ProjectSettings":
         valid_keys = cls.__dataclass_fields__.keys()
         filtered = {k: v for k, v in data.items() if k in valid_keys}
+        filtered.pop("openai_api_key", None)
         return cls(**filtered)
 
 

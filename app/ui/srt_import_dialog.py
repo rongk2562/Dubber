@@ -49,7 +49,8 @@ class SrtImportDialog(QDialog):
             if lang == "km" else
             "📥 Import SRT & Preview Diff"
         )
-        self.resize(1040, 700)
+        from app.ui.theme import fit_dialog_to_screen
+        fit_dialog_to_screen(self, 1000, 680)
         self._init_ui()
 
     def _init_ui(self):

@@ -33,7 +33,8 @@ class SrtExportForChatGPTDialog(QDialog):
             if lang == "km" else
             "📤 Export Chinese SRT for ChatGPT Translation"
         )
-        self.resize(740, 560)
+        from app.ui.theme import fit_dialog_to_screen
+        fit_dialog_to_screen(self, 740, 560)
         self._init_ui()
 
     def _init_ui(self):
@@ -46,7 +47,7 @@ class SrtExportForChatGPTDialog(QDialog):
             if self.lang == "km" else
             f"Total {len(self.project.segments)} segments. Indices and timestamps match the app for clean re-import."
         )
-        lbl_info.setStyleSheet("color: #94a3b8; font-size: 12px;")
+        lbl_info.setStyleSheet("color: #94a3b8; font-size: 9pt;")
         lbl_info.setWordWrap(True)
         layout.addWidget(lbl_info)
 
@@ -94,7 +95,7 @@ class SrtExportForChatGPTDialog(QDialog):
         lay_prompt.addLayout(row_ctx)
 
         self.txt_prompt = QTextEdit()
-        self.txt_prompt.setStyleSheet("font-family: 'Khmer OS Siemreap', 'Noto Sans Khmer', sans-serif; font-size: 12px;")
+        self.txt_prompt.setStyleSheet("font-family: 'Khmer OS Siemreap', 'Noto Sans Khmer', sans-serif; font-size: 9pt;")
         lay_prompt.addWidget(self.txt_prompt, stretch=1)
 
         btn_copy_prompt = QPushButton("📋 ចម្លង prompt សម្រាប់ ChatGPT" if self.lang == "km" else "📋 Copy ChatGPT Prompt")

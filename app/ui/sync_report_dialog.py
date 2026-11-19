@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 from app.sync_engine import SyncReport, SyncReportItem
+from app.ui.theme import fit_dialog_to_screen
 
 class SyncReportDialog(QDialog):
     jump_to_segment = Signal(int) # segment_id
@@ -20,7 +21,7 @@ class SyncReportDialog(QDialog):
         self.report = report
         self.lang = lang
         self.setWindowTitle("របាយការណ៍តម្រឹមពេលវេលា (Time-Sync Report)" if lang == "km" else "Time-Sync Report")
-        self.resize(800, 500)
+        fit_dialog_to_screen(self, 800, 500)
         self._init_ui()
         self._populate("all")
 
@@ -36,10 +37,10 @@ class SyncReportDialog(QDialog):
         def make_stat_card(title: str, val: int, color_hex: str):
             box = QVBoxLayout()
             lbl_val = QLabel(str(val))
-            lbl_val.setStyleSheet(f"font-size: 20px; font-weight: bold; color: {color_hex};")
+            lbl_val.setStyleSheet(f"font-size: 15pt; font-weight: bold; color: {color_hex};")
             lbl_val.setAlignment(Qt.AlignmentFlag.AlignCenter)
             lbl_title = QLabel(title)
-            lbl_title.setStyleSheet("font-size: 11px; color: #94a3b8;")
+            lbl_title.setStyleSheet("font-size: 8.5pt; color: #94a3b8;")
             lbl_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
             box.addWidget(lbl_val)
             box.addWidget(lbl_title)
