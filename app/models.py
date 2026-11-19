@@ -40,6 +40,11 @@ class Segment:
     asr_confidence: float = 1.0  # ASR confidence (0.0 to 1.0)
     asr_changed: bool = False    # True if homophone was repaired
 
+    # External SRT Import & Lock tracking
+    translation_source: str = "" # "", "auto", "manual", "imported"
+    is_locked: bool = False      # True if locked by user against accidental overwrite
+    tts_outdated: bool = False   # True if text changed after TTS generation
+
     @property
     def speech_start(self) -> float:
         """Exact start timestamp of the spoken voice (seconds). Defaults to start."""

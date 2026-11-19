@@ -70,6 +70,9 @@ class MainWindow(QMainWindow):
         self.project = Project()
         self.current_report: Optional[SyncReport] = None
         self.lang = "km" # Default Khmer per SRS
+        self._srt_undo_stack = []
+        self._srt_redo_stack = []
+        self._skip_imported_on_translate = False
         
         # Engines
         self.audio_engine = AudioEngine()
@@ -226,6 +229,8 @@ class MainWindow(QMainWindow):
         menu_file.addAction(s["save_project_as"], self._save_project_as, "Ctrl+Shift+S")
         menu_file.addSeparator()
         menu_file.addAction(s["import_video"], self._import_video, "Ctrl+I")
+        menu_file.addAction("📥 នាំចូល SRT (Import SRT)..." if self.lang == "km" else "📥 Import SRT...", self._import_srt_external)
+        menu_file.addAction("📤 Export SRT ចិន (សម្រាប់បកប្រែ)..." if self.lang == "km" else "📤 Export Chinese SRT (for Translation)...", self._export_zh_srt_chatgpt)
         menu_file.addSeparator()
         menu_file.addAction(s["export_dubbed"], self._export_dubbed, "Ctrl+E")
         menu_file.addAction(s["export_srt"], self._export_srt)
@@ -235,6 +240,11 @@ class MainWindow(QMainWindow):
 
         # Edit Menu
         menu_edit = menubar.addMenu(s["edit"])
+        self.act_undo_srt = menu_edit.addAction("↩️ Undo នាំចូល SRT" if self.lang == "km" else "↩️ Undo SRT Import", self._undo_srt_import, "Ctrl+Z")
+        self.act_redo_srt = menu_edit.addAction("↪️ Redo នាំចូល SRT" if self.lang == "km" else "↪️ Redo SRT Import", self._redo_srt_import, "Ctrl+Y")
+        self.act_undo_srt.setEnabled(False)
+        self.act_redo_srt.setEnabled(False)
+        menu_edit.addSeparator()
         menu_edit.addAction(s["btn_add_segment"], self.segment_table._add_segment)
         menu_edit.addAction(s["btn_split_segment"], self.segment_table._split_selected)
         menu_edit.addAction(s["btn_merge_segments"], self.segment_table._merge_selected)
@@ -329,6 +339,12 @@ class MainWindow(QMainWindow):
         # Step 2: Translate
         self.act_translate = toolbar.addAction("🌐 ២. បកប្រែ" if self.lang == "km" else "🌐 2. Translate", self._run_translation)
         self.act_translate.setToolTip(s["btn_translate_all"])
+
+        self.act_export_zh_srt = toolbar.addAction("📤 Export SRT ចិន" if self.lang == "km" else "📤 Export ZH SRT", self._export_zh_srt_chatgpt)
+        self.act_export_zh_srt.setToolTip("Export SRT ចិន (សម្រាប់បកប្រែក្នុង ChatGPT/ឧបករណ៍ផ្សេង)")
+
+        self.act_import_srt = toolbar.addAction("📥 នាំចូល SRT" if self.lang == "km" else "📥 Import SRT", self._import_srt_external)
+        self.act_import_srt.setToolTip("នាំចូល SRT ខ្មែរដែលបានបកប្រែរួចមកជំនួសក្នុងតារាង")
 
         # Step 3: Generate Voices
         self.act_tts = toolbar.addAction("🗣️ ៣. សំឡេង AI" if self.lang == "km" else "🗣️ 3. Voices", self._run_tts_generation)
@@ -1086,6 +1102,21 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "No Segments", "សូមដំណើរការស្ដាប់សំឡេង (Transcribe) ជាមុនសិន!")
             return
 
+        imported_cnt = sum(1 for s in self.project.segments if getattr(s, "translation_source", "") == "imported")
+        self._skip_imported_on_translate = False
+        if imported_cnt > 0:
+            ans = QMessageBox.question(
+                self,
+                "ការពារជួរនាំចូលពី SRT",
+                f"មានជួរចំនួន {imported_cnt} ដែលត្រូវបាននាំចូលពី SRT (Imported)។\n"
+                "តើអ្នកចង់សរសេរជាន់ជួរទាំងនោះដោយការបកប្រែស្វ័យប្រវត្តិឬទេ?\n"
+                "(Yes = សរសេរជាន់ទាំងអស់ | No = រំលងជួរ Imported | Cancel = បោះបង់)",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel
+            )
+            if ans == QMessageBox.StandardButton.Cancel:
+                return
+            self._skip_imported_on_translate = (ans == QMessageBox.StandardButton.No)
+
         self._start_worker(
             "Translation",
             self._worker_translate,
@@ -1098,6 +1129,8 @@ class MainWindow(QMainWindow):
         lang_lbl = TARGET_LANG_MAP.get(t_lang, {}).get("label", t_lang)
         male_v, female_v = get_voice_pair_for_lang(t_lang)
         for i, s in enumerate(self.project.segments):
+            if getattr(self, "_skip_imported_on_translate", False) and getattr(s, "translation_source", "") == "imported":
+                continue
             pct = int((i / max(1, total)) * 100)
             progress_cb(pct, f"កំពុងបកប្រែវគ្គ {i+1}/{total} ទៅជាសម្ដីនិយាយធម្មជាតិ ({lang_lbl})...")
             prev_txt = self.project.segments[i - 1].text_src if i > 0 else ""
@@ -1110,6 +1143,8 @@ class MainWindow(QMainWindow):
                 target_lang=t_lang,
                 slot_duration=s.slot
             )
+            s.translation_source = "auto"
+            s.tts_outdated = True
             # Ensure segment voice matches target language & invalidate old TTS audio
             s.voice = male_v
             s.tts_file = ""
@@ -1155,10 +1190,10 @@ class MainWindow(QMainWindow):
         global_speed = getattr(self.project.settings, "ai_voice_speed", 1.05)
         t_lang = getattr(self.project.settings, "target_language", "km") or "km"
 
-        # Check for segments missing translation (or still containing untranslated foreign script when target is Khmer)
+        # Check for segments missing translation (skip segments explicitly imported from external SRT)
         missing_km = [
             s for s in self.project.segments
-            if s.text_src.strip() and (
+            if getattr(s, "translation_source", "") != "imported" and s.text_src.strip() and (
                 not s.text_km.strip() or (
                     t_lang == "km" and not re.search(r'[\u1780-\u17d3\u17d5-\u17ff]', s.text_km)
                 )
@@ -1171,13 +1206,26 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 print(f"[MainWindow] Auto-translate notice: {e}")
 
+        has_any_valid_tts = any(
+            bool(s.tts_file and os.path.exists(s.tts_file) and not getattr(s, "tts_outdated", False))
+            for s in self.project.segments
+        )
+        has_any_outdated = any(
+            getattr(s, "tts_outdated", False) or not s.tts_file or not os.path.exists(s.tts_file)
+            for s in self.project.segments
+        )
+        only_regen_outdated = has_any_valid_tts and has_any_outdated
+
         for i, s in enumerate(self.project.segments):
+            if only_regen_outdated and s.tts_file and os.path.exists(s.tts_file) and not getattr(s, "tts_outdated", False):
+                continue
             pct = int((i / max(1, total)) * 85)
             target_speed = s.speed if (s.is_modified and s.speed != 1.0) else global_speed
 
             progress_cb(pct, f"កំពុងបង្កើតសំឡេង AI ប្រុស វគ្គ {i+1}/{total} (ID: {s.id})...")
             self.tts_engine.generate_segment_tts(s, speed_factor=target_speed)
             s.is_modified = False
+            s.tts_outdated = False
             time.sleep(0.08)
 
         # Automatically run 4-stage time-sync & lip-sync alignment right after generating voices!
@@ -1284,6 +1332,74 @@ class MainWindow(QMainWindow):
         with open(out_path, "w", encoding="utf-8") as f:
             f.write(content)
         QMessageBox.information(self, "Exported", f"បានរក្សាទុកឯកសារអក្សររត់ក្រោម៖\n{out_path}")
+
+    def _export_zh_srt_chatgpt(self):
+        if not self.project.segments:
+            QMessageBox.warning(self, "គ្មានទិន្នន័យ", "សូមដំណើរការស្ដាប់សំឡេង (Whisper) ជាមុនសិន!")
+            return
+        from app.ui.srt_export_dialog import SrtExportForChatGPTDialog
+        dlg = SrtExportForChatGPTDialog(self.project, lang=self.lang, parent=self)
+        dlg.exec()
+
+    def _import_srt_external(self):
+        if not self.project.segments:
+            QMessageBox.warning(self, "គ្មានទិន្នន័យ", "សូមដំណើរការស្ដាប់សំឡេង (Whisper) ជាមុនសិន ដើម្បីឱ្យមានជួរពេលវេលាសម្រាប់ផ្គូផ្គង!")
+            return
+        from app.ui.srt_import_dialog import SrtImportDialog
+        dlg = SrtImportDialog(
+            project=self.project,
+            translation_engine=self.translation_engine,
+            lang=self.lang,
+            parent=self
+        )
+        if dlg.exec() == QDialog.DialogCode.Accepted and dlg.undo_snapshot is not None:
+            self._srt_undo_stack.append(dlg.undo_snapshot)
+            self._srt_redo_stack.clear()
+            if hasattr(self, "act_undo_srt"):
+                self.act_undo_srt.setEnabled(True)
+            if hasattr(self, "act_redo_srt"):
+                self.act_redo_srt.setEnabled(False)
+            self.segment_table.set_project(self.project)
+            self._save_autosave()
+            backup_msg = f"\nBackup: {dlg.backup_path}" if dlg.backup_path else ""
+            QMessageBox.information(
+                self,
+                "នាំចូល SRT ជោគជ័យ",
+                f"បានអនុវត្តការជំនួសអត្ថបទពី SRT ចំនួន {dlg.changed_count} ជួរដោយជោគជ័យ!{backup_msg}\n"
+                "ជួរដែលបានផ្លាស់ប្តូរត្រូវបានសម្គាល់ដើម្បីបង្កើតសំឡេង AI ថ្មី (Regenerate)។"
+            )
+
+    def _undo_srt_import(self):
+        if not self._srt_undo_stack:
+            return
+        from app.dubbing.srt_io import create_import_snapshot, restore_import_snapshot
+        redo_snap = create_import_snapshot(self.project.segments, description="Redo SRT Import")
+        undo_snap = self._srt_undo_stack.pop()
+        restore_import_snapshot(self.project, undo_snap)
+        self._srt_redo_stack.append(redo_snap)
+        if hasattr(self, "act_undo_srt"):
+            self.act_undo_srt.setEnabled(len(self._srt_undo_stack) > 0)
+        if hasattr(self, "act_redo_srt"):
+            self.act_redo_srt.setEnabled(True)
+        self.segment_table.set_project(self.project)
+        self._save_autosave()
+        self.status_bar.showMessage("↩️ បានស្ដារអត្ថបទ និងសំឡេងដើមមុនពេលនាំចូល SRT វិញហើយ!", 5000)
+
+    def _redo_srt_import(self):
+        if not self._srt_redo_stack:
+            return
+        from app.dubbing.srt_io import create_import_snapshot, restore_import_snapshot
+        undo_snap = create_import_snapshot(self.project.segments, description="Before Redo SRT Import")
+        redo_snap = self._srt_redo_stack.pop()
+        restore_import_snapshot(self.project, redo_snap)
+        self._srt_undo_stack.append(undo_snap)
+        if hasattr(self, "act_undo_srt"):
+            self.act_undo_srt.setEnabled(True)
+        if hasattr(self, "act_redo_srt"):
+            self.act_redo_srt.setEnabled(len(self._srt_redo_stack) > 0)
+        self.segment_table.set_project(self.project)
+        self._save_autosave()
+        self.status_bar.showMessage("↪️ បានអនុវត្តការនាំចូល SRT ឡើងវិញហើយ!", 5000)
 
     def _export_wav(self):
         out_path, _ = QFileDialog.getSaveFileName(self, "Export Audio", "", "WAV Audio (*.wav)")

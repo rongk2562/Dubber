@@ -64,7 +64,8 @@ class TTSEngine:
         pitch, rate, volume, and acoustic intonation contour profile.
         Returns: (speak_text, rate_str, pitch_str, volume_str, mood_profile)
         """
-        text = segment.text_km.strip() or segment.text_src.strip()
+        from app.dubbing.srt_io import normalize_unicode_and_zwsp
+        text = normalize_unicode_and_zwsp(segment.text_km.strip() or segment.text_src.strip(), keep_zwsp=False)
         src = (segment.text_src or "").strip()
 
         voice_id = segment.voice or "km-KH-PisethNeural"
